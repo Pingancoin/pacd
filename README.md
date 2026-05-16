@@ -67,6 +67,12 @@ go run ./cmd/pacd address multisig --network mainnet --required 3 \
   --pubkey <pubkey4-hex> --pubkey <pubkey5-hex>
 ```
 
+After the final redeem script is chosen, verify the mainnet consensus payout:
+
+```bash
+go run ./cmd/pacd address validate-project --redeemscript <redeem-script-hex>
+```
+
 Mainnet launch requires replacing the placeholder project payout script with
 the final 3-of-5 multisig script generated from the project's five public keys.
 

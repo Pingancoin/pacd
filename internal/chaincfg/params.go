@@ -46,6 +46,10 @@ func MainNetParams() *Params {
 	return params
 }
 
+func MainNetProjectPayoutIsPlaceholder(params *Params) bool {
+	return string(params.ProjectPayoutScript) == PlaceholderProjectPayoutScript
+}
+
 func TestNetParams() *Params {
 	params := commonParams("testnet", "T", "19508", 0x41, 0x42, 0x207fffff, 0x207fffff, 255)
 	params.ProjectPayoutScript = []byte("PAC_TESTNET_3_OF_5_PROJECT_MULTISIG_SCRIPT")

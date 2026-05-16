@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"flag"
@@ -121,6 +122,8 @@ func runAddressCommand(args []string) error {
 		return runPubKeyAddressCommand(args[1:])
 	case "multisig":
 		return runMultiSigAddressCommand(args[1:])
+	case "validate-project":
+		return runValidateProjectAddressCommand(args[1:])
 	default:
 		return fmt.Errorf("unknown address subcommand %q", args[0])
 	}
@@ -180,6 +183,40 @@ func runMultiSigAddressCommand(args []string) error {
 	fmt.Printf("script_hash: %s\n", hex.EncodeToString(scriptHash))
 	fmt.Printf("redeem_script: %s\n", hex.EncodeToString(script))
 	fmt.Printf("p2sh_script: %s\n", hex.EncodeToString(pkScript))
+	if params.Name == "mainnet" {
+		fmt.Printf("chaincfg_project_payout_script: %s\n", goByteSliceLiteral(pkScript))
+	}
+	return nil
+}
+
+func runValidateProjectAddressCommand(args []string) error {
+	flags := flag.NewFlagSet("pacd address validate-project", flag.ContinueOnError)
+	redeemScriptHex := flags.String("redeemscript", "", "project multisig redeem script hex")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	params := chaincfg.MainNetParams()
+	redeemScript, err := hex.DecodeString(*redeemScriptHex)
+	if err != nil {
+		return fmt.Errorf("invalid redeemscript hex: %w", err)
+	}
+	addr, scriptHash, pkScript, err := address.AddressFromScript(params, redeemScript)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("network: %s\n", params.Name)
+	fmt.Printf("address: %s\n", addr)
+	fmt.Printf("script_hash: %s\n", hex.EncodeToString(scriptHash))
+	fmt.Printf("p2sh_script: %s\n", hex.EncodeToString(pkScript))
+	if chaincfg.MainNetProjectPayoutIsPlaceholder(params) {
+		fmt.Println("status: mainnet project payout script is still placeholder")
+		fmt.Printf("replace_with: %s\n", goByteSliceLiteral(pkScript))
+		return nil
+	}
+	if !bytes.Equal(params.ProjectPayoutScript, pkScript) {
+		return fmt.Errorf("mainnet project payout script does not match redeem script")
+	}
+	fmt.Println("status: mainnet project payout script matches redeem script")
 	return nil
 }
 
@@ -196,6 +233,14 @@ func (p *pubKeyList) Set(value string) error {
 	}
 	*p = append(*p, pubKey)
 	return nil
+}
+
+func goByteSliceLiteral(b []byte) string {
+	parts := make([]string, 0, len(b))
+	for _, v := range b {
+		parts = append(parts, fmt.Sprintf("0x%02x", v))
+	}
+	return "[]byte{" + strings.Join(parts, ", ") + "}"
 }
 
 func selectParams(network string) (*chaincfg.Params, error) {
