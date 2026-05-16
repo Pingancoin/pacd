@@ -10,7 +10,7 @@ import (
 
 type BlockHeader struct {
 	Version    int32
-	PrevBlock Hash
+	PrevBlock  Hash
 	MerkleRoot Hash
 	Timestamp  int64
 	Bits       uint32

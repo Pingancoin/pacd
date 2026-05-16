@@ -1,6 +1,10 @@
 package consensus
 
-import "github.com/pinancoin/pacd/internal/chaincfg"
+import (
+	"math"
+
+	"github.com/pinancoin/pacd/internal/chaincfg"
+)
 
 func CalcBlockSubsidy(height int64, params *chaincfg.Params) int64 {
 	if height <= 0 {
@@ -29,7 +33,7 @@ func EstimateTotalSubsidy(params *chaincfg.Params) int64 {
 	blocksAtSubsidy := params.ReductionInterval - 1
 	for subsidy > 0 {
 		add := subsidy * blocksAtSubsidy
-		if total > ^int64(0)-add {
+		if total > math.MaxInt64-add {
 			return total
 		}
 		total += add

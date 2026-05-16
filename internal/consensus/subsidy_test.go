@@ -33,3 +33,12 @@ func TestCoinbaseSplit(t *testing.T) {
 		t.Fatalf("project subsidy = %d", project)
 	}
 }
+
+func TestEstimateTotalSubsidy(t *testing.T) {
+	params := chaincfg.MainNetParams()
+	got := EstimateTotalSubsidy(params)
+	want := int64(2_099_999_999_721_303)
+	if got != want {
+		t.Fatalf("total subsidy = %d, want %d", got, want)
+	}
+}
