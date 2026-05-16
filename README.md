@@ -1,0 +1,66 @@
+# Pinancoin `pacd`
+
+`pacd` is the first minimal chain-core milestone for Pinancoin / PAC.
+
+The current repository is intentionally small: it establishes the PAC
+consensus constants, BLAKE-256 proof-of-work hash path, block subsidy schedule,
+95/5 coinbase split, and pure-PoW block validation before wallet, explorer,
+pool, and full P2P/RPC surfaces are added.
+
+## Consensus Draft
+
+| Field | Value |
+| --- | --- |
+| Coin | Pinancoin |
+| Ticker | PAC |
+| Consensus | Pure PoW |
+| PoW hash | BLAKE-256, 14 rounds |
+| Target block time | 150 seconds |
+| Initial subsidy | 16.92065961 PAC |
+| Subsidy reduction | `subsidy = subsidy * 100 / 101` every 12,288 blocks |
+| Max supply target | Approximately 21 million PAC |
+| Coinbase split | 95% miner, 5% project development multisig |
+| First normal block split | 16.07462662 PAC miner / 0.84603299 PAC project |
+| Premine | 0 |
+| Genesis time | 2026-06-01 00:00:00 UTC |
+| Genesis message | `Pinancoin PAC genesis: pure PoW, no premine, BLAKE-256 r14, 2026-06-01` |
+
+## Pure PoW Boundary
+
+PAC deliberately removes Decred's hybrid PoW/PoS path. The minimal chain core
+does not define ticket purchases, votes, stake validation, stake difficulty,
+stakebase transactions, treasury voting, or agenda voting.
+
+## Layout
+
+```text
+cmd/pacd              minimal node/miner CLI
+internal/blockchain   in-memory chain validation
+internal/chaincfg     PAC network parameters
+internal/consensus    subsidy, PoW, ASERT difficulty
+internal/mining       candidate block and nonce search
+internal/wire         block and transaction primitives
+docs/                 project design notes
+```
+
+## Try It
+
+This workspace does not currently have Go installed. Once Go 1.22+ is
+available:
+
+```bash
+go test ./...
+go run ./cmd/pacd --network simnet --printparams
+go run ./cmd/pacd --network simnet --mine PsimMiner --blocks 3
+```
+
+Mainnet launch requires replacing the placeholder project payout script with
+the final 3-of-5 multisig script generated from the project's five public keys.
+
+## Supply Note
+
+The initial subsidy is adjusted for PAC's 150-second block target and 12,288
+block reduction interval so zero-premine issuance lands very close to 21
+million PAC while keeping the smooth `100/101` reduction style. The current
+integer subsidy schedule estimates total block subsidy at approximately
+20,999,999.99721303 PAC.
