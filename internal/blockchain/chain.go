@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/pinancoin/pacd/internal/chaincfg"
-	"github.com/pinancoin/pacd/internal/consensus"
-	"github.com/pinancoin/pacd/internal/wire"
+	"github.com/Pingancoin/pacd/internal/chaincfg"
+	"github.com/Pingancoin/pacd/internal/consensus"
+	"github.com/Pingancoin/pacd/internal/wire"
 )
 
 type Chain struct {

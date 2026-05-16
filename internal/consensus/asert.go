@@ -4,7 +4,7 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/pinancoin/pacd/internal/chaincfg"
+	"github.com/Pingancoin/pacd/internal/chaincfg"
 )
 
 const asertRadix = int64(1 << 16)

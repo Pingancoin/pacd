@@ -1,6 +1,6 @@
-# Pinancoin `pacd`
+# Pingancoin `pacd`
 
-`pacd` is the first minimal chain-core milestone for Pinancoin / PAC.
+`pacd` is the first minimal chain-core milestone for Pingancoin / PAC.
 
 The current repository is intentionally small: it establishes the PAC
 consensus constants, BLAKE-256 proof-of-work hash path, block subsidy schedule,
@@ -11,7 +11,7 @@ pool, and full P2P/RPC surfaces are added.
 
 | Field | Value |
 | --- | --- |
-| Coin | Pinancoin |
+| Coin | Pingancoin |
 | Ticker | PAC |
 | Consensus | Pure PoW |
 | PoW hash | BLAKE-256, 14 rounds |
@@ -23,7 +23,7 @@ pool, and full P2P/RPC surfaces are added.
 | First normal block split | 16.07462662 PAC miner / 0.84603299 PAC project |
 | Premine | 0 |
 | Genesis time | 2026-06-01 00:00:00 UTC |
-| Genesis message | `Pinancoin PAC genesis: pure PoW, no premine, BLAKE-256 r14, 2026-06-01` |
+| Genesis message | `Pingancoin PAC genesis: pure PoW, no premine, BLAKE-256 r14, 2026-06-01` |
 
 ## Pure PoW Boundary
 

@@ -4,13 +4,13 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/pinancoin/pacd/internal/wire"
+	"github.com/Pingancoin/pacd/internal/wire"
 )
 
 const (
 	Coin = int64(100_000_000)
 
-	GenesisMessage = "Pinancoin PAC genesis: pure PoW, no premine, BLAKE-256 r14, 2026-06-01"
+	GenesisMessage = "Pingancoin PAC genesis: pure PoW, no premine, BLAKE-256 r14, 2026-06-01"
 
 	PlaceholderProjectPayoutScript = "PAC_MAINNET_3_OF_5_PROJECT_MULTISIG_SCRIPT_REPLACE_BEFORE_LAUNCH"
 )

@@ -1,4 +1,4 @@
-module github.com/pinancoin/pacd
+module github.com/Pingancoin/pacd
 
 go 1.22
 

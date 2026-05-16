@@ -5,9 +5,9 @@ import (
 	"math"
 	"time"
 
-	"github.com/pinancoin/pacd/internal/blockchain"
-	"github.com/pinancoin/pacd/internal/consensus"
-	"github.com/pinancoin/pacd/internal/wire"
+	"github.com/Pingancoin/pacd/internal/blockchain"
+	"github.com/Pingancoin/pacd/internal/consensus"
+	"github.com/Pingancoin/pacd/internal/wire"
 )
 
 func NewCandidate(chain *blockchain.Chain, minerScript []byte, timestamp time.Time) (*wire.MsgBlock, error) {

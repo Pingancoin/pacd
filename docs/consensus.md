@@ -2,7 +2,7 @@
 
 ## Network Identity
 
-- Name: Pinancoin
+- Name: Pingancoin
 - Ticker: PAC
 - Mainnet address family: `P...`
 - Testnet address family: `T...`
@@ -15,7 +15,7 @@ configuration value.
 ## Genesis
 
 - Timestamp: 2026-06-01 00:00:00 UTC
-- Message: `Pinancoin PAC genesis: pure PoW, no premine, BLAKE-256 r14, 2026-06-01`
+- Message: `Pingancoin PAC genesis: pure PoW, no premine, BLAKE-256 r14, 2026-06-01`
 - Spendable premine: 0 PAC
 
 The genesis block is a fixed anchor and does not create spendable PAC. Normal

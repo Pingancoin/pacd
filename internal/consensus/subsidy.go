@@ -3,7 +3,7 @@ package consensus
 import (
 	"math"
 
-	"github.com/pinancoin/pacd/internal/chaincfg"
+	"github.com/Pingancoin/pacd/internal/chaincfg"
 )
 
 func CalcBlockSubsidy(height int64, params *chaincfg.Params) int64 {

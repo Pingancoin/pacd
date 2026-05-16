@@ -3,7 +3,7 @@ package consensus
 import (
 	"testing"
 
-	"github.com/pinancoin/pacd/internal/chaincfg"
+	"github.com/Pingancoin/pacd/internal/chaincfg"
 )
 
 func TestSubsidySchedule(t *testing.T) {

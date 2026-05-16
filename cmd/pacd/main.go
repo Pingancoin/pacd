@@ -6,10 +6,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/pinancoin/pacd/internal/blockchain"
-	"github.com/pinancoin/pacd/internal/chaincfg"
-	"github.com/pinancoin/pacd/internal/consensus"
-	"github.com/pinancoin/pacd/internal/mining"
+	"github.com/Pingancoin/pacd/internal/blockchain"
+	"github.com/Pingancoin/pacd/internal/chaincfg"
+	"github.com/Pingancoin/pacd/internal/consensus"
+	"github.com/Pingancoin/pacd/internal/mining"
 )
 
 func main() {

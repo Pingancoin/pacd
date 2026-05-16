@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/pinancoin/pacd/internal/chaincfg"
-	"github.com/pinancoin/pacd/internal/wire"
+	"github.com/Pingancoin/pacd/internal/chaincfg"
+	"github.com/Pingancoin/pacd/internal/wire"
 )
 
 func CompactToBig(compact uint32) *big.Int {
