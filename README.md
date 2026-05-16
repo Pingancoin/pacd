@@ -41,6 +41,7 @@ internal/blockchain   in-memory chain validation
 internal/chaincfg     PAC network parameters
 internal/consensus    subsidy, PoW, ASERT difficulty
 internal/mining       candidate block and nonce search
+internal/p2p          peer manager and P2P handshake protocol
 internal/rpcserver    local HTTP RPC for blocks, mempool, mining, tx lookup
 internal/wallet       wallet keys, balance scan, signing, submission
 internal/wire         block and transaction primitives
@@ -122,6 +123,22 @@ curl -s -X POST http://127.0.0.1:9509/generate \
   -H 'content-type: application/json' \
   -d '{"address":"<simnet-miner-address>","blocks":1}'
 ```
+
+Start a local P2P listener:
+
+```bash
+go run ./cmd/pacd --network simnet --p2p --listen 127.0.0.1:29508
+```
+
+Connect another local node:
+
+```bash
+go run ./cmd/pacd --network simnet --p2p --listen 127.0.0.1:29509 --connect 127.0.0.1:29508
+```
+
+The current P2P milestone covers message framing, network magic checks,
+payload checksums, version/verack handshake, ping/pong, connection limits, and
+peer tracking. Header-first sync and block relay are the next P2P layer.
 
 ## Supply Note
 

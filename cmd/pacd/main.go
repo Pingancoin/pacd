@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"github.com/Pingancoin/pacd/internal/chaincfg"
 	"github.com/Pingancoin/pacd/internal/consensus"
 	"github.com/Pingancoin/pacd/internal/mining"
+	"github.com/Pingancoin/pacd/internal/p2p"
 	"github.com/Pingancoin/pacd/internal/rpcserver"
 	"github.com/Pingancoin/pacd/internal/wire"
 )
@@ -42,6 +44,11 @@ func main() {
 	reset := flag.Bool("reset", false, "delete existing simnet block data before starting")
 	rpc := flag.Bool("rpc", false, "start the local read-only HTTP RPC server")
 	rpcListen := flag.String("rpclisten", "127.0.0.1:9509", "HTTP RPC listen address")
+	p2pEnabled := flag.Bool("p2p", false, "start the P2P listener and peer manager")
+	p2pListen := flag.String("listen", "", "P2P listen address; defaults to 127.0.0.1:<network default port> when --p2p is set")
+	maxPeers := flag.Int("maxpeers", 32, "maximum P2P peers")
+	var connectPeers stringList
+	flag.Var(&connectPeers, "connect", "P2P peer address to connect to; repeat for multiple peers")
 	flag.Parse()
 
 	params, err := selectParams(*network)
@@ -69,8 +76,8 @@ func main() {
 			printConsensusParams(params)
 		}
 		printMiningSummary(chain, store)
-		if *rpc {
-			runRPC(chain, store, *rpcListen)
+		if *rpc || *p2pEnabled {
+			runServices(chain, store, *rpc, *rpcListen, *p2pEnabled, *p2pListen, connectPeers, *maxPeers)
 		}
 		return
 	}
@@ -111,8 +118,8 @@ func main() {
 		}
 	}
 	printMiningSummary(chain, store)
-	if *rpc {
-		runRPC(chain, store, *rpcListen)
+	if *rpc || *p2pEnabled {
+		runServices(chain, store, *rpc, *rpcListen, *p2pEnabled, *p2pListen, connectPeers, *maxPeers)
 	}
 }
 
@@ -227,6 +234,21 @@ type pubKeyList [][]byte
 
 func (p *pubKeyList) String() string {
 	return fmt.Sprintf("%d pubkey(s)", len(*p))
+}
+
+type stringList []string
+
+func (s *stringList) String() string {
+	return strings.Join(*s, ",")
+}
+
+func (s *stringList) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("empty peer address")
+	}
+	*s = append(*s, value)
+	return nil
 }
 
 func (p *pubKeyList) Set(value string) error {
@@ -349,12 +371,49 @@ func printMiningSummary(chain *blockchain.Chain, store *blockstore.Store) {
 	)
 }
 
-func runRPC(chain *blockchain.Chain, store *blockstore.Store, listen string) {
+func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bool, rpcListen string, p2pEnabled bool, p2pListen string, connectPeers []string, maxPeers int) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	fmt.Printf("rpc listening on http://%s\n", listen)
-	if err := rpcserver.New(chain, store).ListenAndServe(ctx, listen); err != nil {
-		exit(err)
+
+	errCh := make(chan error, 2)
+	if rpcEnabled {
+		fmt.Printf("rpc listening on http://%s\n", rpcListen)
+		go func() {
+			errCh <- rpcserver.New(chain, store).ListenAndServe(ctx, rpcListen)
+		}()
+	}
+	if p2pEnabled {
+		listen := p2pListen
+		if listen == "" {
+			listen = "127.0.0.1:" + chain.Params().DefaultPort
+		}
+		node, err := p2p.NewNode(p2p.Config{
+			Params:     chain.Params(),
+			ListenAddr: listen,
+			Connect:    connectPeers,
+			MaxPeers:   maxPeers,
+			BestHeight: chain.Height,
+			Logger:     log.New(os.Stdout, "", 0),
+		})
+		if err != nil {
+			exit(err)
+		}
+		fmt.Printf("p2p listening on %s\n", listen)
+		if len(connectPeers) > 0 {
+			fmt.Printf("p2p connecting to %s\n", strings.Join(connectPeers, ","))
+		}
+		go func() {
+			errCh <- node.Start(ctx)
+		}()
+	}
+
+	select {
+	case <-ctx.Done():
+		return
+	case err := <-errCh:
+		if err != nil {
+			exit(err)
+		}
 	}
 }
 

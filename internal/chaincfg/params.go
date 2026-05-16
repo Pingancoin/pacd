@@ -19,6 +19,7 @@ type Params struct {
 	Name                 string
 	Ticker               string
 	DefaultPort          string
+	NetworkMagic         uint32
 	AddressPrefix        string
 	PubKeyHashAddrID     byte
 	ScriptHashAddrID     byte
@@ -42,7 +43,7 @@ type Params struct {
 }
 
 func MainNetParams() *Params {
-	params := commonParams("mainnet", "P", "9508", 0x37, 0x38, 0x1d00ffff, 0x1b01ffff, 224)
+	params := commonParams("mainnet", "P", "9508", 0xfacec001, 0x37, 0x38, 0x1d00ffff, 0x1b01ffff, 224)
 	params.CoinbaseMaturity = 100
 	params.ProjectPayoutScript = []byte(PlaceholderProjectPayoutScript)
 	return params
@@ -53,21 +54,21 @@ func MainNetProjectPayoutIsPlaceholder(params *Params) bool {
 }
 
 func TestNetParams() *Params {
-	params := commonParams("testnet", "T", "19508", 0x41, 0x42, 0x207fffff, 0x207fffff, 255)
+	params := commonParams("testnet", "T", "19508", 0xfacec0a1, 0x41, 0x42, 0x207fffff, 0x207fffff, 255)
 	params.CoinbaseMaturity = 100
 	params.ProjectPayoutScript = []byte("PAC_TESTNET_3_OF_5_PROJECT_MULTISIG_SCRIPT")
 	return params
 }
 
 func SimNetParams() *Params {
-	params := commonParams("simnet", "S", "29508", 0x3f, 0x3f, 0x207fffff, 0x207fffff, 255)
+	params := commonParams("simnet", "S", "29508", 0xfacec0f1, 0x3f, 0x3f, 0x207fffff, 0x207fffff, 255)
 	params.ASERTHalfLife = 10 * time.Minute
 	params.CoinbaseMaturity = 2
 	params.ProjectPayoutScript = []byte("PAC_SIMNET_3_OF_5_PROJECT_MULTISIG_SCRIPT")
 	return params
 }
 
-func commonParams(name, addressPrefix, defaultPort string, pubKeyHashAddrID, scriptHashAddrID byte, powLimitBits, genesisBits uint32, powLimitShift uint) *Params {
+func commonParams(name, addressPrefix, defaultPort string, networkMagic uint32, pubKeyHashAddrID, scriptHashAddrID byte, powLimitBits, genesisBits uint32, powLimitShift uint) *Params {
 	powLimit := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), powLimitShift), big.NewInt(1))
 	genesisBlock := genesisBlock(genesisBits)
 
@@ -75,6 +76,7 @@ func commonParams(name, addressPrefix, defaultPort string, pubKeyHashAddrID, scr
 		Name:                 name,
 		Ticker:               "PAC",
 		DefaultPort:          defaultPort,
+		NetworkMagic:         networkMagic,
 		AddressPrefix:        addressPrefix,
 		PubKeyHashAddrID:     pubKeyHashAddrID,
 		ScriptHashAddrID:     scriptHashAddrID,

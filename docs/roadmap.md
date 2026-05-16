@@ -29,7 +29,8 @@
 - Add RPC methods for mining, block lookup, transaction broadcast, and node
   status.
 - Add wallet-facing transaction and address UTXO lookup RPC methods.
-- Add P2P peer management and DNS seeds.
+- Add P2P peer management, version/verack handshake, ping/pong, and DNS seeds.
+- Add header-first sync and block relay.
 
 ## Phase 4: Explorer
 
