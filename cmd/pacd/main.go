@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Pingancoin/pacd/internal/blockchain"
@@ -13,6 +16,7 @@ import (
 	"github.com/Pingancoin/pacd/internal/chaincfg"
 	"github.com/Pingancoin/pacd/internal/consensus"
 	"github.com/Pingancoin/pacd/internal/mining"
+	"github.com/Pingancoin/pacd/internal/rpcserver"
 	"github.com/Pingancoin/pacd/internal/wire"
 )
 
@@ -26,6 +30,8 @@ func main() {
 	quiet := flag.Bool("quiet", false, "only print final mining summary")
 	dataDir := flag.String("datadir", defaultDataDir(), "base directory for local chain data")
 	reset := flag.Bool("reset", false, "delete existing simnet block data before starting")
+	rpc := flag.Bool("rpc", false, "start the local read-only HTTP RPC server")
+	rpcListen := flag.String("rpclisten", "127.0.0.1:9509", "HTTP RPC listen address")
 	flag.Parse()
 
 	params, err := selectParams(*network)
@@ -53,6 +59,9 @@ func main() {
 			printConsensusParams(params)
 		}
 		printMiningSummary(chain, store)
+		if *rpc {
+			runRPC(chain, store, *rpcListen)
+		}
 		return
 	}
 	if *blocks <= 0 {
@@ -89,6 +98,9 @@ func main() {
 		}
 	}
 	printMiningSummary(chain, store)
+	if *rpc {
+		runRPC(chain, store, *rpcListen)
+	}
 }
 
 func selectParams(network string) (*chaincfg.Params, error) {
@@ -184,6 +196,15 @@ func printMiningSummary(chain *blockchain.Chain, store *blockstore.Store) {
 		len(chain.Blocks())-1,
 		store.Path(),
 	)
+}
+
+func runRPC(chain *blockchain.Chain, store *blockstore.Store, listen string) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	fmt.Printf("rpc listening on http://%s\n", listen)
+	if err := rpcserver.New(chain, store).ListenAndServe(ctx, listen); err != nil {
+		exit(err)
+	}
 }
 
 func formatPAC(atoms int64) string {

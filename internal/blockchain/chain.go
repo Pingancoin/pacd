@@ -40,6 +40,22 @@ func (c *Chain) Blocks() []*wire.MsgBlock {
 	return append([]*wire.MsgBlock(nil), c.blocks...)
 }
 
+func (c *Chain) BlockByHeight(height uint32) (*wire.MsgBlock, bool) {
+	if int(height) >= len(c.blocks) {
+		return nil, false
+	}
+	return c.blocks[height], true
+}
+
+func (c *Chain) BlockByHash(hash wire.Hash) (*wire.MsgBlock, bool) {
+	for _, block := range c.blocks {
+		if block.MustBlockHash() == hash {
+			return block, true
+		}
+	}
+	return nil, false
+}
+
 func (c *Chain) TotalSubsidy() int64 {
 	var total int64
 	for _, block := range c.blocks {
