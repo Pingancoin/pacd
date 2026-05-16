@@ -7,6 +7,7 @@ import (
 
 	"github.com/Pingancoin/pacd/internal/chaincfg"
 	"github.com/Pingancoin/pacd/internal/consensus"
+	"github.com/Pingancoin/pacd/internal/txscript"
 	"github.com/Pingancoin/pacd/internal/wire"
 )
 
@@ -229,7 +230,7 @@ func validateAndConnectRegularTx(tx *wire.MsgTx, view map[wire.OutPoint]*wire.Tx
 
 	spent := make(map[wire.OutPoint]struct{}, len(tx.TxIn))
 	var inputTotal int64
-	for _, txIn := range tx.TxIn {
+	for inputIndex, txIn := range tx.TxIn {
 		outpoint := txIn.PreviousOutPoint
 		if _, ok := spent[outpoint]; ok {
 			return 0, fmt.Errorf("duplicate input %s:%d", outpoint.Hash, outpoint.Index)
@@ -239,6 +240,9 @@ func validateAndConnectRegularTx(tx *wire.MsgTx, view map[wire.OutPoint]*wire.Tx
 		prevOut, ok := view[outpoint]
 		if !ok {
 			return 0, fmt.Errorf("missing input %s:%d", outpoint.Hash, outpoint.Index)
+		}
+		if err := txscript.VerifyP2PKHInput(tx, inputIndex, prevOut.PkScript); err != nil {
+			return 0, fmt.Errorf("input %d: %w", inputIndex, err)
 		}
 		if inputTotal > math.MaxInt64-prevOut.Value {
 			return 0, fmt.Errorf("input value overflow")

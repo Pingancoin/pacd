@@ -84,7 +84,10 @@ func main() {
 		exit(fmt.Errorf("maxnonce must be <= %d", wire.MaxUint32))
 	}
 
-	minerScript := []byte(*mineTo)
+	minerScript, err := minerPayoutScript(params, *mineTo)
+	if err != nil {
+		exit(err)
+	}
 	nextTime, err := miningStartTime(chain, *startTime)
 	if err != nil {
 		exit(err)
@@ -295,6 +298,13 @@ func miningStartTime(chain *blockchain.Chain, startTime string) (time.Time, erro
 		return time.Time{}, fmt.Errorf("starttime must be after genesis time %s", genesisTime.UTC().Format(time.RFC3339))
 	}
 	return parsed.UTC().Add(-params.TargetTimePerBlock), nil
+}
+
+func minerPayoutScript(params *chaincfg.Params, mineTo string) ([]byte, error) {
+	if script, err := address.DecodeAddressScript(params, mineTo); err == nil {
+		return script, nil
+	}
+	return []byte(mineTo), nil
 }
 
 func printMiningHeader(params *chaincfg.Params, store *blockstore.Store, miner string, blocks int, quiet bool) {

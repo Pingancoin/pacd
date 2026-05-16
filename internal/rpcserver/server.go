@@ -1,27 +1,34 @@
 package rpcserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/Pingancoin/pacd/internal/address"
 	"github.com/Pingancoin/pacd/internal/blockchain"
 	"github.com/Pingancoin/pacd/internal/blockstore"
 	"github.com/Pingancoin/pacd/internal/chaincfg"
 	"github.com/Pingancoin/pacd/internal/consensus"
+	"github.com/Pingancoin/pacd/internal/mining"
 	"github.com/Pingancoin/pacd/internal/wire"
 )
 
 type Server struct {
-	chain *blockchain.Chain
-	store *blockstore.Store
-	mux   *http.ServeMux
+	chain   *blockchain.Chain
+	store   *blockstore.Store
+	mux     *http.ServeMux
+	mu      sync.Mutex
+	mempool []*wire.MsgTx
 }
 
 func New(chain *blockchain.Chain, store *blockstore.Store) *Server {
@@ -36,6 +43,9 @@ func New(chain *blockchain.Chain, store *blockstore.Store) *Server {
 	server.mux.HandleFunc("/getblockhash/", server.handleGetBlockHash)
 	server.mux.HandleFunc("/getblock/", server.handleGetBlock)
 	server.mux.HandleFunc("/getmininginfo", server.handleGetMiningInfo)
+	server.mux.HandleFunc("/getrawmempool", server.handleGetRawMempool)
+	server.mux.HandleFunc("/submitrawtransaction", server.handleSubmitRawTransaction)
+	server.mux.HandleFunc("/generate", server.handleGenerate)
 	return server
 }
 
@@ -86,6 +96,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 			"/getblockhash/{height}",
 			"/getblock/{hash-or-height}",
 			"/getmininginfo",
+			"/getrawmempool",
+			"/submitrawtransaction",
+			"/generate",
 		},
 	})
 }
@@ -95,6 +108,8 @@ func (s *Server) handleGetBlockCount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	writeJSON(w, map[string]uint32{"height": s.chain.Height()})
 }
 
@@ -103,6 +118,8 @@ func (s *Server) handleGetBestBlock(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	writeJSON(w, blockSummary(s.chain.Tip()))
 }
 
@@ -117,6 +134,8 @@ func (s *Server) handleGetBlockHash(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid height")
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	block, ok := s.chain.BlockByHeight(uint32(height64))
 	if !ok {
 		writeError(w, http.StatusNotFound, "block height not found")
@@ -131,6 +150,8 @@ func (s *Server) handleGetBlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/getblock/")
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	block, err := s.lookupBlock(id)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -148,6 +169,8 @@ func (s *Server) handleGetMiningInfo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	params := s.chain.Params()
 	nextHeight := s.chain.Height() + 1
 	nextBits := s.chain.ExpectedBits(nextHeight)
@@ -166,7 +189,128 @@ func (s *Server) handleGetMiningInfo(w http.ResponseWriter, r *http.Request) {
 			"total":   miner + project,
 		},
 		"utxos":    s.chain.UTXOCount(),
+		"mempool":  len(s.mempool),
 		"datafile": s.store.Path(),
+	})
+}
+
+func (s *Server) handleGetRawMempool(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	writeJSON(w, map[string]any{
+		"size":  len(s.mempool),
+		"txids": txIDs(s.mempool),
+	})
+}
+
+func (s *Server) handleSubmitRawTransaction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	txHex, err := readTxHex(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	serialized, err := hex.DecodeString(txHex)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid transaction hex")
+		return
+	}
+	tx, err := wire.DeserializeTx(serialized)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if tx.IsCoinbase() {
+		writeError(w, http.StatusBadRequest, "coinbase transactions are not accepted into mempool")
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	candidate := append(append([]*wire.MsgTx(nil), s.mempool...), tx)
+	if _, err := s.chain.CalcFees(candidate); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.mempool = candidate
+	writeJSON(w, map[string]any{
+		"accepted":    true,
+		"txid":        tx.MustTxHash().String(),
+		"mempoolsize": len(s.mempool),
+	})
+}
+
+func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req generateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid generate request")
+		return
+	}
+	if req.Blocks == 0 {
+		req.Blocks = 1
+	}
+	if req.Blocks < 0 {
+		writeError(w, http.StatusBadRequest, "blocks must be positive")
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	params := s.chain.Params()
+	if params.Name != "simnet" {
+		writeError(w, http.StatusBadRequest, "RPC mining is currently available on simnet only")
+		return
+	}
+	minerScript, err := address.DecodeAddressScript(params, req.Address)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("miner address: %v", err))
+		return
+	}
+
+	hashes := make([]string, 0, req.Blocks)
+	nextTime := time.Now().UTC()
+	tipTime := time.Unix(s.chain.Tip().Header.Timestamp, 0).UTC()
+	if !nextTime.After(tipTime) {
+		nextTime = tipTime
+	}
+	for i := 0; i < req.Blocks; i++ {
+		nextTime = nextTime.Add(params.TargetTimePerBlock)
+		txs := []*wire.MsgTx(nil)
+		if i == 0 && len(s.mempool) > 0 {
+			txs = append(txs, s.mempool...)
+		}
+		block, err := mining.MineBlockWithTransactions(s.chain, minerScript, nextTime, txs, req.MaxNonce)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := s.chain.AddBlock(block); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := s.store.Append(block); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		hashes = append(hashes, block.MustBlockHash().String())
+		if len(txs) > 0 {
+			s.mempool = nil
+		}
+	}
+	writeJSON(w, map[string]any{
+		"blocks": hashes,
+		"height": s.chain.Height(),
 	})
 }
 
@@ -241,6 +385,17 @@ type outputResult struct {
 	PkScript string `json:"pkscript"`
 }
 
+type submitRawTransactionRequest struct {
+	Hex   string `json:"hex"`
+	TxHex string `json:"txhex"`
+}
+
+type generateRequest struct {
+	Address  string `json:"address"`
+	Blocks   int    `json:"blocks"`
+	MaxNonce uint32 `json:"maxnonce"`
+}
+
 func blockVerbose(params *chaincfg.Params, block *wire.MsgBlock) blockVerboseResult {
 	miner, project := consensus.CalcBlockOneTimeSplit(int64(block.Header.Height), params)
 	result := blockVerboseResult{
@@ -271,6 +426,40 @@ func blockVerbose(params *chaincfg.Params, block *wire.MsgBlock) blockVerboseRes
 		result.Tx = append(result.Tx, txResult)
 	}
 	return result
+}
+
+func readTxHex(r *http.Request) (string, error) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1024*1024))
+	if err != nil {
+		return "", err
+	}
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		return "", fmt.Errorf("empty transaction body")
+	}
+	if strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+		var req submitRawTransactionRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			return "", fmt.Errorf("invalid JSON body")
+		}
+		txHex := strings.TrimSpace(req.TxHex)
+		if txHex == "" {
+			txHex = strings.TrimSpace(req.Hex)
+		}
+		if txHex == "" {
+			return "", fmt.Errorf("transaction hex is required")
+		}
+		return txHex, nil
+	}
+	return string(body), nil
+}
+
+func txIDs(txs []*wire.MsgTx) []string {
+	txids := make([]string, 0, len(txs))
+	for _, tx := range txs {
+		txids = append(txids, tx.MustTxHash().String())
+	}
+	return txids
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

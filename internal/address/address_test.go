@@ -36,6 +36,13 @@ func TestMainNetAddressesStartWithP(t *testing.T) {
 	if !strings.HasPrefix(pubKeyAddr, "P") {
 		t.Fatalf("pubkey hash address = %s", pubKeyAddr)
 	}
+	pubKeyScript, err := address.DecodeAddressScript(params, pubKeyAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pubKeyScript) != 25 {
+		t.Fatalf("p2pkh script length = %d", len(pubKeyScript))
+	}
 
 	scriptAddr, err := address.ScriptHashAddress(params, payload)
 	if err != nil {
@@ -43,6 +50,13 @@ func TestMainNetAddressesStartWithP(t *testing.T) {
 	}
 	if !strings.HasPrefix(scriptAddr, "P") {
 		t.Fatalf("script hash address = %s", scriptAddr)
+	}
+	scriptScript, err := address.DecodeAddressScript(params, scriptAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scriptScript) != 23 {
+		t.Fatalf("p2sh script length = %d", len(scriptScript))
 	}
 }
 

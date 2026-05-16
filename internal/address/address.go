@@ -31,6 +31,27 @@ func ScriptHashAddress(params *chaincfg.Params, scriptHash []byte) (string, erro
 	return EncodeBase58Check(params.ScriptHashAddrID, scriptHash), nil
 }
 
+func DecodeAddressScript(params *chaincfg.Params, encoded string) ([]byte, error) {
+	version, payload, err := DecodeBase58Check(encoded)
+	if err != nil {
+		return nil, err
+	}
+	switch version {
+	case params.PubKeyHashAddrID:
+		if len(payload) != hash160Size {
+			return nil, fmt.Errorf("pubkey hash length is %d, want %d", len(payload), hash160Size)
+		}
+		return PayToPubKeyHashScript(payload), nil
+	case params.ScriptHashAddrID:
+		if len(payload) != hash160Size {
+			return nil, fmt.Errorf("script hash length is %d, want %d", len(payload), hash160Size)
+		}
+		return PayToScriptHashScript(payload), nil
+	default:
+		return nil, fmt.Errorf("address version 0x%02x is not valid for %s", version, params.Name)
+	}
+}
+
 func AddressFromPubKey(params *chaincfg.Params, pubKey []byte) (string, []byte, []byte, error) {
 	if err := validatePubKey(pubKey); err != nil {
 		return "", nil, nil, err

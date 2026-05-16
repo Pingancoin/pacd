@@ -76,6 +76,32 @@ go run ./cmd/pacd address validate-project --redeemscript <redeem-script-hex>
 Mainnet launch requires replacing the placeholder project payout script with
 the final 3-of-5 multisig script generated from the project's five public keys.
 
+## Wallet Preview
+
+`pacwallet` is currently a developer preview. It can create a local wallet,
+generate addresses, and export public keys for multisig setup. Wallet files are
+stored with `0600` permissions, but private keys are not encrypted yet.
+
+```bash
+go run ./cmd/pacwallet create --network simnet
+go run ./cmd/pacwallet newaddress --network simnet --label miner-1
+go run ./cmd/pacwallet list --network simnet
+go run ./cmd/pacwallet pubkeys --network simnet
+go run ./cmd/pacwallet balance --network simnet --rpc http://127.0.0.1:9509
+go run ./cmd/pacwallet drafttx --network simnet --rpc http://127.0.0.1:9509 --to <address> --amount 1.25
+go run ./cmd/pacwallet drafttx --network simnet --rpc http://127.0.0.1:9509 --to <address> --amount 1.25 --sign
+go run ./cmd/pacwallet send --network simnet --rpc http://127.0.0.1:9509 --to <address> --amount 1.25
+```
+
+`pacd` also exposes a minimal simnet transaction loop over HTTP RPC:
+
+```bash
+curl -s http://127.0.0.1:9509/getrawmempool
+curl -s -X POST http://127.0.0.1:9509/generate \
+  -H 'content-type: application/json' \
+  -d '{"address":"<simnet-miner-address>","blocks":1}'
+```
+
 ## Supply Note
 
 The initial subsidy is adjusted for PAC's 150-second block target and 12,288

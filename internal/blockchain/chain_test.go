@@ -4,9 +4,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Pingancoin/pacd/internal/address"
 	"github.com/Pingancoin/pacd/internal/blockchain"
 	"github.com/Pingancoin/pacd/internal/chaincfg"
 	"github.com/Pingancoin/pacd/internal/mining"
+	"github.com/Pingancoin/pacd/internal/wallet"
 	"github.com/Pingancoin/pacd/internal/wire"
 )
 
@@ -59,10 +61,12 @@ func TestMineAndValidateOneHundredSimnetBlocks(t *testing.T) {
 func TestRegularTransactionUpdatesUTXOSetAndPaysFee(t *testing.T) {
 	params := chaincfg.SimNetParams()
 	chain := blockchain.New(params)
+	w := testWallet(t, params)
+	minerScript := testAddressScript(t, params, w.Keys[0].Address)
 	blockTime := time.Unix(params.GenesisBlock.Header.Timestamp, 0)
 
 	blockTime = blockTime.Add(params.TargetTimePerBlock)
-	block1, err := mining.MineBlock(chain, []byte("SsimMiner"), blockTime, 0)
+	block1, err := mining.MineBlock(chain, minerScript, blockTime, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,26 +74,27 @@ func TestRegularTransactionUpdatesUTXOSetAndPaysFee(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	coinbaseHash := block1.Transactions[0].MustTxHash()
-	minerOutpoint := wire.OutPoint{Hash: coinbaseHash, Index: 0}
-	minerOut, ok := chain.LookupUTXO(minerOutpoint)
-	if !ok {
-		t.Fatal("missing miner coinbase utxo")
-	}
-
 	const fee = int64(10_000)
-	spend := &wire.MsgTx{
-		Version: 1,
-		TxIn: []*wire.TxIn{{
-			PreviousOutPoint: minerOutpoint,
-			SignatureScript:  []byte("simnet-signature-placeholder"),
-			Sequence:         wire.MaxUint32,
-		}},
-		TxOut: []*wire.TxOut{{
-			Value:    minerOut.Value - fee,
-			PkScript: []byte("SsimRecipient"),
+	if err := w.AddKey(params, "recipient"); err != nil {
+		t.Fatal(err)
+	}
+	balance := wallet.Balance{
+		UTXOs: []wallet.UTXO{{
+			Address: w.Keys[0].Address,
+			TxHash:  block1.Transactions[0].MustTxHash().String(),
+			Vout:    0,
+			Value:   block1.Transactions[0].TxOut[0].Value,
+			Height:  block1.Header.Height,
 		}},
 	}
+	draft, err := wallet.BuildDraftTx(params, w, balance, w.Keys[1].Address, balance.UTXOs[0].Value-fee, fee, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wallet.SignDraftTx(params, w, draft); err != nil {
+		t.Fatal(err)
+	}
+	spend := draft.Tx
 
 	blockTime = blockTime.Add(params.TargetTimePerBlock)
 	block2, err := mining.MineBlockWithTransactions(chain, []byte("SsimMiner"), blockTime, []*wire.MsgTx{spend}, 0)
@@ -100,6 +105,7 @@ func TestRegularTransactionUpdatesUTXOSetAndPaysFee(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	minerOutpoint := wire.OutPoint{Hash: block1.Transactions[0].MustTxHash(), Index: 0}
 	if _, ok := chain.LookupUTXO(minerOutpoint); ok {
 		t.Fatal("spent miner outpoint is still in utxo set")
 	}
@@ -117,10 +123,12 @@ func TestRegularTransactionUpdatesUTXOSetAndPaysFee(t *testing.T) {
 func TestRejectDoubleSpendInBlock(t *testing.T) {
 	params := chaincfg.SimNetParams()
 	chain := blockchain.New(params)
+	w := testWallet(t, params)
+	minerScript := testAddressScript(t, params, w.Keys[0].Address)
 	blockTime := time.Unix(params.GenesisBlock.Header.Timestamp, 0)
 
 	blockTime = blockTime.Add(params.TargetTimePerBlock)
-	block1, err := mining.MineBlock(chain, []byte("SsimMiner"), blockTime, 0)
+	block1, err := mining.MineBlock(chain, minerScript, blockTime, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,35 +136,54 @@ func TestRejectDoubleSpendInBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	coinbaseHash := block1.Transactions[0].MustTxHash()
-	minerOutpoint := wire.OutPoint{Hash: coinbaseHash, Index: 0}
-	minerOut, ok := chain.LookupUTXO(minerOutpoint)
-	if !ok {
-		t.Fatal("missing miner coinbase utxo")
+	if err := w.AddKey(params, "recipient"); err != nil {
+		t.Fatal(err)
 	}
-
-	spend := func(script string) *wire.MsgTx {
-		return &wire.MsgTx{
-			Version: 1,
-			TxIn: []*wire.TxIn{{
-				PreviousOutPoint: minerOutpoint,
-				SignatureScript:  []byte("simnet-signature-placeholder"),
-				Sequence:         wire.MaxUint32,
-			}},
-			TxOut: []*wire.TxOut{{
-				Value:    minerOut.Value - 1,
-				PkScript: []byte(script),
-			}},
+	balance := wallet.Balance{
+		UTXOs: []wallet.UTXO{{
+			Address: w.Keys[0].Address,
+			TxHash:  block1.Transactions[0].MustTxHash().String(),
+			Vout:    0,
+			Value:   block1.Transactions[0].TxOut[0].Value,
+			Height:  block1.Header.Height,
+		}},
+	}
+	spend := func() *wire.MsgTx {
+		draft, err := wallet.BuildDraftTx(params, w, balance, w.Keys[1].Address, balance.UTXOs[0].Value-1, 1, "")
+		if err != nil {
+			t.Fatal(err)
 		}
+		if err := wallet.SignDraftTx(params, w, draft); err != nil {
+			t.Fatal(err)
+		}
+		return draft.Tx
 	}
 
 	blockTime = blockTime.Add(params.TargetTimePerBlock)
 	if _, err := mining.MineBlockWithTransactions(chain, []byte("SsimMiner"), blockTime, []*wire.MsgTx{
-		spend("SsimRecipient1"),
-		spend("SsimRecipient2"),
+		spend(),
+		spend(),
 	}, 0); err == nil {
 		t.Fatal("expected double spend to be rejected")
 	}
+}
+
+func testWallet(t *testing.T, params *chaincfg.Params) *wallet.Wallet {
+	t.Helper()
+	w, err := wallet.Create(wallet.Path(t.TempDir(), params.Name), params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+func testAddressScript(t *testing.T, params *chaincfg.Params, addr string) []byte {
+	t.Helper()
+	script, err := address.DecodeAddressScript(params, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return script
 }
 
 func chaincfgSplit(t *testing.T, params *chaincfg.Params, height uint32) (int64, int64) {
