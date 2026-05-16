@@ -80,7 +80,7 @@ go run ./cmd/pacd address validate-project --redeemscript <redeem-script-hex>
 Mainnet launch requires replacing the placeholder project payout script with
 the final 3-of-5 multisig script generated from the project's five public keys.
 
-## Wallet Preview
+## Wallet
 
 `pacwallet` can create encrypted local wallets, generate receiving addresses,
 import/export private keys, export public keys for multisig setup, sign and
@@ -88,6 +88,12 @@ submit basic P2PKH transactions, track transaction history, and distinguish
 spendable, immature, and pending balances. Wallet files are stored with `0600`
 permissions. New wallets should use `--passphrase` or
 `PACWALLET_PASSPHRASE`.
+
+The standalone wallet repository is:
+
+```text
+https://github.com/Pingancoin/pacwallet
+```
 
 ```bash
 PACWALLET_PASSPHRASE='change-this-dev-passphrase' go run ./cmd/pacwallet create --network simnet

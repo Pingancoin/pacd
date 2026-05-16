@@ -19,6 +19,8 @@
 - Encrypt wallet private keys with passphrase-based AES-GCM storage.
 - Add private key import/export and passphrase rotation.
 - Add coinbase maturity, wallet balance indexing, and transaction history.
+- Split `pacwallet` into `Pingancoin/pacwallet` as a standalone wallet
+  repository.
 
 ## Phase 3: Full Node Surfaces
 
