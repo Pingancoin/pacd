@@ -21,6 +21,7 @@ pool, and full P2P/RPC surfaces are added.
 | Max supply target | Approximately 21 million PAC |
 | Coinbase split | 95% miner, 5% project development multisig |
 | First normal block split | 16.07462662 PAC miner / 0.84603299 PAC project |
+| Coinbase maturity | 100 blocks on mainnet/testnet, 2 blocks on simnet |
 | Premine | 0 |
 | Genesis time | 2026-06-01 00:00:00 UTC |
 | Genesis message | `Pingancoin PAC genesis: pure PoW, no premine, BLAKE-256 r14, 2026-06-01` |
@@ -35,10 +36,13 @@ stakebase transactions, treasury voting, or agenda voting.
 
 ```text
 cmd/pacd              minimal node/miner CLI
+cmd/pacwallet         encrypted developer wallet CLI
 internal/blockchain   in-memory chain validation
 internal/chaincfg     PAC network parameters
 internal/consensus    subsidy, PoW, ASERT difficulty
 internal/mining       candidate block and nonce search
+internal/rpcserver    local HTTP RPC for blocks, mempool, mining, tx lookup
+internal/wallet       wallet keys, balance scan, signing, submission
 internal/wire         block and transaction primitives
 docs/                 project design notes
 ```
@@ -78,25 +82,36 @@ the final 3-of-5 multisig script generated from the project's five public keys.
 
 ## Wallet Preview
 
-`pacwallet` is currently a developer preview. It can create a local wallet,
-generate addresses, and export public keys for multisig setup. Wallet files are
-stored with `0600` permissions, but private keys are not encrypted yet.
+`pacwallet` can create encrypted local wallets, generate receiving addresses,
+import/export private keys, export public keys for multisig setup, sign and
+submit basic P2PKH transactions, track transaction history, and distinguish
+spendable, immature, and pending balances. Wallet files are stored with `0600`
+permissions. New wallets should use `--passphrase` or
+`PACWALLET_PASSPHRASE`.
 
 ```bash
-go run ./cmd/pacwallet create --network simnet
-go run ./cmd/pacwallet newaddress --network simnet --label miner-1
+PACWALLET_PASSPHRASE='change-this-dev-passphrase' go run ./cmd/pacwallet create --network simnet
+PACWALLET_PASSPHRASE='change-this-dev-passphrase' go run ./cmd/pacwallet info --network simnet
+PACWALLET_PASSPHRASE='change-this-dev-passphrase' go run ./cmd/pacwallet receive --network simnet --label miner-1
 go run ./cmd/pacwallet list --network simnet
 go run ./cmd/pacwallet pubkeys --network simnet
 go run ./cmd/pacwallet balance --network simnet --rpc http://127.0.0.1:9509
+go run ./cmd/pacwallet history --network simnet --rpc http://127.0.0.1:9509
 go run ./cmd/pacwallet drafttx --network simnet --rpc http://127.0.0.1:9509 --to <address> --amount 1.25
-go run ./cmd/pacwallet drafttx --network simnet --rpc http://127.0.0.1:9509 --to <address> --amount 1.25 --sign
-go run ./cmd/pacwallet send --network simnet --rpc http://127.0.0.1:9509 --to <address> --amount 1.25
+PACWALLET_PASSPHRASE='change-this-dev-passphrase' go run ./cmd/pacwallet drafttx --network simnet --rpc http://127.0.0.1:9509 --to <address> --amount 1.25 --sign
+PACWALLET_PASSPHRASE='change-this-dev-passphrase' go run ./cmd/pacwallet send --network simnet --rpc http://127.0.0.1:9509 --to <address> --amount 1.25
 ```
+
+Existing plaintext developer wallets are still readable for local testing, but
+mainnet launch wallets should be created with encryption enabled from the
+start.
 
 `pacd` also exposes a minimal simnet transaction loop over HTTP RPC:
 
 ```bash
 curl -s http://127.0.0.1:9509/getrawmempool
+curl -s http://127.0.0.1:9509/getrawtransaction/<txid>
+curl -s http://127.0.0.1:9509/getaddressutxos/<address>
 curl -s -X POST http://127.0.0.1:9509/generate \
   -H 'content-type: application/json' \
   -d '{"address":"<simnet-miner-address>","blocks":1}'

@@ -73,6 +73,14 @@ func TestRegularTransactionUpdatesUTXOSetAndPaysFee(t *testing.T) {
 	if err := chain.AddBlock(block1); err != nil {
 		t.Fatal(err)
 	}
+	blockTime = blockTime.Add(params.TargetTimePerBlock)
+	block2, err := mining.MineBlock(chain, minerScript, blockTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.AddBlock(block2); err != nil {
+		t.Fatal(err)
+	}
 
 	const fee = int64(10_000)
 	if err := w.AddKey(params, "recipient"); err != nil {
@@ -97,11 +105,11 @@ func TestRegularTransactionUpdatesUTXOSetAndPaysFee(t *testing.T) {
 	spend := draft.Tx
 
 	blockTime = blockTime.Add(params.TargetTimePerBlock)
-	block2, err := mining.MineBlockWithTransactions(chain, []byte("SsimMiner"), blockTime, []*wire.MsgTx{spend}, 0)
+	block3, err := mining.MineBlockWithTransactions(chain, []byte("SsimMiner"), blockTime, []*wire.MsgTx{spend}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := chain.AddBlock(block2); err != nil {
+	if err := chain.AddBlock(block3); err != nil {
 		t.Fatal(err)
 	}
 
@@ -114,9 +122,53 @@ func TestRegularTransactionUpdatesUTXOSetAndPaysFee(t *testing.T) {
 		t.Fatal("missing regular transaction output in utxo set")
 	}
 
-	minerSubsidy, _ := chaincfgSplit(t, params, block2.Header.Height)
-	if got := block2.Transactions[0].TxOut[0].Value; got != minerSubsidy+fee {
+	minerSubsidy, _ := chaincfgSplit(t, params, block3.Header.Height)
+	if got := block3.Transactions[0].TxOut[0].Value; got != minerSubsidy+fee {
 		t.Fatalf("coinbase miner reward = %d, want %d", got, minerSubsidy+fee)
+	}
+}
+
+func TestRejectImmatureCoinbaseSpend(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	chain := blockchain.New(params)
+	w := testWallet(t, params)
+	minerScript := testAddressScript(t, params, w.Keys[0].Address)
+	blockTime := time.Unix(params.GenesisBlock.Header.Timestamp, 0)
+
+	blockTime = blockTime.Add(params.TargetTimePerBlock)
+	block1, err := mining.MineBlock(chain, minerScript, blockTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.AddBlock(block1); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := w.AddKey(params, "recipient"); err != nil {
+		t.Fatal(err)
+	}
+	balance := wallet.Balance{
+		UTXOs: []wallet.UTXO{{
+			Address:  w.Keys[0].Address,
+			TxHash:   block1.Transactions[0].MustTxHash().String(),
+			Vout:     0,
+			Value:    block1.Transactions[0].TxOut[0].Value,
+			Height:   block1.Header.Height,
+			Coinbase: true,
+			Mature:   true,
+		}},
+	}
+	draft, err := wallet.BuildDraftTx(params, w, balance, w.Keys[1].Address, balance.UTXOs[0].Value-1, 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wallet.SignDraftTx(params, w, draft); err != nil {
+		t.Fatal(err)
+	}
+
+	blockTime = blockTime.Add(params.TargetTimePerBlock)
+	if _, err := mining.MineBlockWithTransactions(chain, []byte("SsimMiner"), blockTime, []*wire.MsgTx{draft.Tx}, 0); err == nil {
+		t.Fatal("expected immature coinbase spend to be rejected")
 	}
 }
 
@@ -133,6 +185,14 @@ func TestRejectDoubleSpendInBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := chain.AddBlock(block1); err != nil {
+		t.Fatal(err)
+	}
+	blockTime = blockTime.Add(params.TargetTimePerBlock)
+	block2, err := mining.MineBlock(chain, minerScript, blockTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.AddBlock(block2); err != nil {
 		t.Fatal(err)
 	}
 

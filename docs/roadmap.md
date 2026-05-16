@@ -16,7 +16,9 @@
 - Generate final 3-of-5 project multisig script from five public keys.
 - Build `pacwallet` key generation, address listing, transaction creation, and signing.
 - Add signed transaction submission through the local `pacd` RPC.
-- Add coinbase maturity and wallet balance indexing.
+- Encrypt wallet private keys with passphrase-based AES-GCM storage.
+- Add private key import/export and passphrase rotation.
+- Add coinbase maturity, wallet balance indexing, and transaction history.
 
 ## Phase 3: Full Node Surfaces
 
@@ -24,6 +26,7 @@
 - Add minimal mempool and UTXO validation.
 - Add RPC methods for mining, block lookup, transaction broadcast, and node
   status.
+- Add wallet-facing transaction and address UTXO lookup RPC methods.
 - Add P2P peer management and DNS seeds.
 
 ## Phase 4: Explorer

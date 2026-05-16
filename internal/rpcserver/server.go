@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +43,8 @@ func New(chain *blockchain.Chain, store *blockstore.Store) *Server {
 	server.mux.HandleFunc("/getbestblock", server.handleGetBestBlock)
 	server.mux.HandleFunc("/getblockhash/", server.handleGetBlockHash)
 	server.mux.HandleFunc("/getblock/", server.handleGetBlock)
+	server.mux.HandleFunc("/getrawtransaction/", server.handleGetRawTransaction)
+	server.mux.HandleFunc("/getaddressutxos/", server.handleGetAddressUTXOs)
 	server.mux.HandleFunc("/getmininginfo", server.handleGetMiningInfo)
 	server.mux.HandleFunc("/getrawmempool", server.handleGetRawMempool)
 	server.mux.HandleFunc("/submitrawtransaction", server.handleSubmitRawTransaction)
@@ -95,6 +98,8 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 			"/getbestblock",
 			"/getblockhash/{height}",
 			"/getblock/{hash-or-height}",
+			"/getrawtransaction/{txid}",
+			"/getaddressutxos/{address}",
 			"/getmininginfo",
 			"/getrawmempool",
 			"/submitrawtransaction",
@@ -164,6 +169,46 @@ func (s *Server) handleGetBlock(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, blockVerbose(s.chain.Params(), block))
 }
 
+func (s *Server) handleGetRawTransaction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	txid := strings.TrimPrefix(r.URL.Path, "/getrawtransaction/")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, height, pending, ok := s.lookupTransaction(txid)
+	if !ok {
+		writeError(w, http.StatusNotFound, "transaction not found")
+		return
+	}
+	result, err := transactionVerbose(s.chain.Params(), tx, height, pending)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleGetAddressUTXOs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	addr := strings.TrimPrefix(r.URL.Path, "/getaddressutxos/")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	results, err := s.addressUTXOs(addr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{
+		"address": addr,
+		"utxos":   results,
+	})
+}
+
 func (s *Server) handleGetMiningInfo(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -204,6 +249,7 @@ func (s *Server) handleGetRawMempool(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"size":  len(s.mempool),
 		"txids": txIDs(s.mempool),
+		"tx":    transactionResults(s.chain.Params(), s.mempool),
 	})
 }
 
@@ -337,6 +383,97 @@ func (s *Server) lookupBlock(id string) (*wire.MsgBlock, error) {
 	return block, nil
 }
 
+func (s *Server) lookupTransaction(txid string) (*wire.MsgTx, uint32, bool, bool) {
+	for _, tx := range s.mempool {
+		if tx.MustTxHash().String() == txid {
+			return tx, 0, true, true
+		}
+	}
+	for _, block := range s.chain.Blocks() {
+		for _, tx := range block.Transactions {
+			if tx.MustTxHash().String() == txid {
+				return tx, block.Header.Height, false, true
+			}
+		}
+	}
+	return nil, 0, false, false
+}
+
+func (s *Server) addressUTXOs(addr string) ([]addressUTXOResult, error) {
+	script, err := address.DecodeAddressScript(s.chain.Params(), addr)
+	if err != nil {
+		return nil, err
+	}
+	type indexedUTXO struct {
+		result addressUTXOResult
+	}
+	utxos := make(map[string]indexedUTXO)
+	for _, block := range s.chain.Blocks() {
+		for _, tx := range block.Transactions {
+			for _, txIn := range tx.TxIn {
+				delete(utxos, outpointKey(txIn.PreviousOutPoint.Hash.String(), txIn.PreviousOutPoint.Index))
+			}
+			txHash := tx.MustTxHash().String()
+			for i, txOut := range tx.TxOut {
+				if !bytes.Equal(txOut.PkScript, script) {
+					continue
+				}
+				height := block.Header.Height
+				utxos[outpointKey(txHash, uint32(i))] = indexedUTXO{
+					result: addressUTXOResult{
+						TxHash:   txHash,
+						Vout:     uint32(i),
+						Value:    txOut.Value,
+						Height:   height,
+						Coinbase: tx.IsCoinbase(),
+						Mature:   !tx.IsCoinbase() || s.chain.Height()+1 >= height+s.chain.Params().CoinbaseMaturity,
+					},
+				}
+			}
+		}
+	}
+	for _, tx := range s.mempool {
+		for _, txIn := range tx.TxIn {
+			delete(utxos, outpointKey(txIn.PreviousOutPoint.Hash.String(), txIn.PreviousOutPoint.Index))
+		}
+		txHash := tx.MustTxHash().String()
+		for i, txOut := range tx.TxOut {
+			if !bytes.Equal(txOut.PkScript, script) {
+				continue
+			}
+			utxos[outpointKey(txHash, uint32(i))] = indexedUTXO{
+				result: addressUTXOResult{
+					TxHash:  txHash,
+					Vout:    uint32(i),
+					Value:   txOut.Value,
+					Pending: true,
+				},
+			}
+		}
+	}
+	results := make([]addressUTXOResult, 0, len(utxos))
+	for _, utxo := range utxos {
+		results = append(results, utxo.result)
+	}
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Pending != results[j].Pending {
+			return !results[i].Pending
+		}
+		if results[i].Height != results[j].Height {
+			return results[i].Height < results[j].Height
+		}
+		if results[i].TxHash != results[j].TxHash {
+			return results[i].TxHash < results[j].TxHash
+		}
+		return results[i].Vout < results[j].Vout
+	})
+	return results, nil
+}
+
+func outpointKey(hash string, index uint32) string {
+	return fmt.Sprintf("%s:%d", hash, index)
+}
+
 type blockSummaryResult struct {
 	Height     uint32 `json:"height"`
 	Hash       string `json:"hash"`
@@ -369,9 +506,17 @@ type blockVerboseResult struct {
 }
 
 type transactionResult struct {
-	Hash string         `json:"hash"`
-	Vin  []inputResult  `json:"vin"`
-	Vout []outputResult `json:"vout"`
+	Hash     string         `json:"hash"`
+	Coinbase bool           `json:"coinbase"`
+	Vin      []inputResult  `json:"vin"`
+	Vout     []outputResult `json:"vout"`
+}
+
+type transactionVerboseResult struct {
+	transactionResult
+	Height  uint32 `json:"height"`
+	Pending bool   `json:"pending"`
+	Hex     string `json:"hex"`
 }
 
 type inputResult struct {
@@ -383,6 +528,17 @@ type outputResult struct {
 	N        uint32 `json:"n"`
 	Value    int64  `json:"value"`
 	PkScript string `json:"pkscript"`
+	Address  string `json:"address,omitempty"`
+}
+
+type addressUTXOResult struct {
+	TxHash   string `json:"tx_hash"`
+	Vout     uint32 `json:"vout"`
+	Value    int64  `json:"value"`
+	Height   uint32 `json:"height"`
+	Coinbase bool   `json:"coinbase"`
+	Mature   bool   `json:"mature"`
+	Pending  bool   `json:"pending"`
 }
 
 type submitRawTransactionRequest struct {
@@ -404,27 +560,7 @@ func blockVerbose(params *chaincfg.Params, block *wire.MsgBlock) blockVerboseRes
 		Subsidy:            miner + project,
 		Tx:                 make([]transactionResult, 0, len(block.Transactions)),
 	}
-	for _, tx := range block.Transactions {
-		txResult := transactionResult{
-			Hash: tx.MustTxHash().String(),
-			Vin:  make([]inputResult, 0, len(tx.TxIn)),
-			Vout: make([]outputResult, 0, len(tx.TxOut)),
-		}
-		for _, txIn := range tx.TxIn {
-			txResult.Vin = append(txResult.Vin, inputResult{
-				Hash:  txIn.PreviousOutPoint.Hash.String(),
-				Index: txIn.PreviousOutPoint.Index,
-			})
-		}
-		for i, txOut := range tx.TxOut {
-			txResult.Vout = append(txResult.Vout, outputResult{
-				N:        uint32(i),
-				Value:    txOut.Value,
-				PkScript: hex.EncodeToString(txOut.PkScript),
-			})
-		}
-		result.Tx = append(result.Tx, txResult)
-	}
+	result.Tx = transactionResults(params, block.Transactions)
 	return result
 }
 
@@ -460,6 +596,54 @@ func txIDs(txs []*wire.MsgTx) []string {
 		txids = append(txids, tx.MustTxHash().String())
 	}
 	return txids
+}
+
+func transactionResults(params *chaincfg.Params, txs []*wire.MsgTx) []transactionResult {
+	results := make([]transactionResult, 0, len(txs))
+	for _, tx := range txs {
+		results = append(results, transactionSummary(params, tx))
+	}
+	return results
+}
+
+func transactionSummary(params *chaincfg.Params, tx *wire.MsgTx) transactionResult {
+	txResult := transactionResult{
+		Hash:     tx.MustTxHash().String(),
+		Coinbase: tx.IsCoinbase(),
+		Vin:      make([]inputResult, 0, len(tx.TxIn)),
+		Vout:     make([]outputResult, 0, len(tx.TxOut)),
+	}
+	for _, txIn := range tx.TxIn {
+		txResult.Vin = append(txResult.Vin, inputResult{
+			Hash:  txIn.PreviousOutPoint.Hash.String(),
+			Index: txIn.PreviousOutPoint.Index,
+		})
+	}
+	for i, txOut := range tx.TxOut {
+		output := outputResult{
+			N:        uint32(i),
+			Value:    txOut.Value,
+			PkScript: hex.EncodeToString(txOut.PkScript),
+		}
+		if addr, ok := address.AddressFromPkScript(params, txOut.PkScript); ok {
+			output.Address = addr
+		}
+		txResult.Vout = append(txResult.Vout, output)
+	}
+	return txResult
+}
+
+func transactionVerbose(params *chaincfg.Params, tx *wire.MsgTx, height uint32, pending bool) (transactionVerboseResult, error) {
+	serialized, err := tx.Serialize()
+	if err != nil {
+		return transactionVerboseResult{}, err
+	}
+	return transactionVerboseResult{
+		transactionResult: transactionSummary(params, tx),
+		Height:            height,
+		Pending:           pending,
+		Hex:               hex.EncodeToString(serialized),
+	}, nil
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

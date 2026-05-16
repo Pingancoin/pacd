@@ -107,6 +107,14 @@ func TestSubmitRawTransactionAndGenerate(t *testing.T) {
 	if err := chain.AddBlock(block1); err != nil {
 		t.Fatal(err)
 	}
+	blockTime = blockTime.Add(params.TargetTimePerBlock)
+	block2, err := mining.MineBlock(chain, minerScript, blockTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.AddBlock(block2); err != nil {
+		t.Fatal(err)
+	}
 
 	server := rpcserver.New(chain, blockstore.New(t.TempDir()))
 	httpServer := httptest.NewServer(server.Handler())
@@ -114,11 +122,13 @@ func TestSubmitRawTransactionAndGenerate(t *testing.T) {
 
 	coinbase := block1.Transactions[0]
 	balance := wallet.Balance{UTXOs: []wallet.UTXO{{
-		Address: w.Keys[0].Address,
-		TxHash:  coinbase.MustTxHash().String(),
-		Vout:    0,
-		Value:   coinbase.TxOut[0].Value,
-		Height:  block1.Header.Height,
+		Address:  w.Keys[0].Address,
+		TxHash:   coinbase.MustTxHash().String(),
+		Vout:     0,
+		Value:    coinbase.TxOut[0].Value,
+		Height:   block1.Header.Height,
+		Coinbase: true,
+		Mature:   true,
 	}}}
 	draft, err := wallet.BuildDraftTx(params, w, balance, w.Keys[1].Address, chaincfg.Coin, 10_000, "")
 	if err != nil {
@@ -143,6 +153,15 @@ func TestSubmitRawTransactionAndGenerate(t *testing.T) {
 	if mempool.Size != 1 || len(mempool.TxIDs) != 1 || mempool.TxIDs[0] != submitted.TxID {
 		t.Fatalf("unexpected mempool: %+v", mempool)
 	}
+	var pendingTx struct {
+		Hash    string `json:"hash"`
+		Pending bool   `json:"pending"`
+		Hex     string `json:"hex"`
+	}
+	getJSON(t, httpServer.URL+"/getrawtransaction/"+submitted.TxID, &pendingTx)
+	if pendingTx.Hash != submitted.TxID || !pendingTx.Pending || pendingTx.Hex == "" {
+		t.Fatalf("unexpected pending tx: %+v", pendingTx)
+	}
 
 	var generated struct {
 		Blocks []string `json:"blocks"`
@@ -152,7 +171,7 @@ func TestSubmitRawTransactionAndGenerate(t *testing.T) {
 		"address": w.Keys[0].Address,
 		"blocks":  1,
 	}, &generated)
-	if generated.Height != 2 || len(generated.Blocks) != 1 {
+	if generated.Height != 3 || len(generated.Blocks) != 1 {
 		t.Fatalf("unexpected generate result: %+v", generated)
 	}
 
@@ -160,13 +179,44 @@ func TestSubmitRawTransactionAndGenerate(t *testing.T) {
 		Height uint32 `json:"height"`
 		Tx     []any  `json:"tx"`
 	}
-	getJSON(t, httpServer.URL+"/getblock/2", &block)
-	if block.Height != 2 || len(block.Tx) != 2 {
+	getJSON(t, httpServer.URL+"/getblock/3", &block)
+	if block.Height != 3 || len(block.Tx) != 2 {
 		t.Fatalf("unexpected generated block: %+v", block)
+	}
+	var confirmedTx struct {
+		Hash    string `json:"hash"`
+		Height  uint32 `json:"height"`
+		Pending bool   `json:"pending"`
+	}
+	getJSON(t, httpServer.URL+"/getrawtransaction/"+submitted.TxID, &confirmedTx)
+	if confirmedTx.Hash != submitted.TxID || confirmedTx.Pending || confirmedTx.Height != 3 {
+		t.Fatalf("unexpected confirmed tx: %+v", confirmedTx)
+	}
+	var addressUTXOs struct {
+		Address string `json:"address"`
+		UTXOs   []struct {
+			TxHash string `json:"tx_hash"`
+			Value  int64  `json:"value"`
+		} `json:"utxos"`
+	}
+	getJSON(t, httpServer.URL+"/getaddressutxos/"+w.Keys[1].Address, &addressUTXOs)
+	if addressUTXOs.Address != w.Keys[1].Address || len(addressUTXOs.UTXOs) != 1 || addressUTXOs.UTXOs[0].TxHash != submitted.TxID {
+		t.Fatalf("unexpected address utxos: %+v", addressUTXOs)
 	}
 	getJSON(t, httpServer.URL+"/getrawmempool", &mempool)
 	if mempool.Size != 0 {
 		t.Fatalf("mempool was not cleared: %+v", mempool)
+	}
+
+	history, err := wallet.ScanHistory(params, w, httpServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 4 {
+		t.Fatalf("history entries = %d, want 4: %+v", len(history), history)
+	}
+	if got := history[len(history)-1]; got.TxHash != submitted.TxID || got.Pending || got.Sent == 0 || got.Received == 0 {
+		t.Fatalf("unexpected wallet history entry: %+v", got)
 	}
 }
 

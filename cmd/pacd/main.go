@@ -272,6 +272,7 @@ func printConsensusParams(params *chaincfg.Params) {
 	fmt.Printf("asert half life: %s\n", params.ASERTHalfLife)
 	fmt.Printf("base subsidy: %.8f PAC\n", float64(params.BaseSubsidy)/float64(chaincfg.Coin))
 	fmt.Printf("estimated total subsidy: %.8f PAC\n", float64(total)/float64(chaincfg.Coin))
+	fmt.Printf("coinbase maturity: %d block(s)\n", params.CoinbaseMaturity)
 	fmt.Printf("coinbase split: %d%% miner / %d%% project\n", params.MinerRewardPercent, params.ProjectRewardPercent)
 	fmt.Printf("project multisig: %d-of-%d\n", params.ProjectMultisigM, params.ProjectMultisigN)
 }

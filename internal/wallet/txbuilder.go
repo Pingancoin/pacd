@@ -97,6 +97,10 @@ func BuildDraftTx(params *chaincfg.Params, w *Wallet, balance Balance, destinati
 }
 
 func SignDraftTx(params *chaincfg.Params, w *Wallet, draft DraftTx) error {
+	return SignDraftTxWithPassphrase(params, w, draft, "")
+}
+
+func SignDraftTxWithPassphrase(params *chaincfg.Params, w *Wallet, draft DraftTx, passphrase string) error {
 	keysByAddress := make(map[string]Key, len(w.Keys))
 	for _, key := range w.Keys {
 		keysByAddress[key.Address] = key
@@ -109,7 +113,7 @@ func SignDraftTx(params *chaincfg.Params, w *Wallet, draft DraftTx) error {
 		if !ok {
 			return fmt.Errorf("no wallet key for %s", utxo.Address)
 		}
-		privBytes, err := hex.DecodeString(key.PrivKeyHex)
+		privBytes, err := w.PrivateKeyBytes(key, passphrase)
 		if err != nil {
 			return err
 		}
@@ -129,6 +133,9 @@ func selectUTXOs(utxos []UTXO, need int64) ([]UTXO, int64, error) {
 	var selected []UTXO
 	var total int64
 	for _, utxo := range utxos {
+		if !isSpendableUTXO(utxo) {
+			continue
+		}
 		selected = append(selected, utxo)
 		total += utxo.Value
 		if total >= need {
@@ -136,4 +143,14 @@ func selectUTXOs(utxos []UTXO, need int64) ([]UTXO, int64, error) {
 		}
 	}
 	return nil, 0, fmt.Errorf("insufficient funds: need %d atoms, have %d atoms", need, total)
+}
+
+func isSpendableUTXO(utxo UTXO) bool {
+	if utxo.Pending {
+		return false
+	}
+	if utxo.Coinbase {
+		return utxo.Mature
+	}
+	return true
 }

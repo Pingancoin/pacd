@@ -52,6 +52,26 @@ func DecodeAddressScript(params *chaincfg.Params, encoded string) ([]byte, error
 	}
 }
 
+func AddressFromPkScript(params *chaincfg.Params, script []byte) (string, bool) {
+	if len(script) == 25 &&
+		script[0] == 0x76 &&
+		script[1] == 0xa9 &&
+		script[2] == 0x14 &&
+		script[23] == 0x88 &&
+		script[24] == 0xac {
+		addr, err := PubKeyHashAddress(params, script[3:23])
+		return addr, err == nil
+	}
+	if len(script) == 23 &&
+		script[0] == 0xa9 &&
+		script[1] == 0x14 &&
+		script[22] == 0x87 {
+		addr, err := ScriptHashAddress(params, script[2:22])
+		return addr, err == nil
+	}
+	return "", false
+}
+
 func AddressFromPubKey(params *chaincfg.Params, pubKey []byte) (string, []byte, []byte, error) {
 	if err := validatePubKey(pubKey); err != nil {
 		return "", nil, nil, err

@@ -33,6 +33,7 @@ type Params struct {
 	MulSubsidy           int64
 	DivSubsidy           int64
 	ReductionInterval    int64
+	CoinbaseMaturity     uint32
 	MinerRewardPercent   int64
 	ProjectRewardPercent int64
 	ProjectMultisigM     int
@@ -42,6 +43,7 @@ type Params struct {
 
 func MainNetParams() *Params {
 	params := commonParams("mainnet", "P", "9508", 0x37, 0x38, 0x1d00ffff, 0x1b01ffff, 224)
+	params.CoinbaseMaturity = 100
 	params.ProjectPayoutScript = []byte(PlaceholderProjectPayoutScript)
 	return params
 }
@@ -52,6 +54,7 @@ func MainNetProjectPayoutIsPlaceholder(params *Params) bool {
 
 func TestNetParams() *Params {
 	params := commonParams("testnet", "T", "19508", 0x41, 0x42, 0x207fffff, 0x207fffff, 255)
+	params.CoinbaseMaturity = 100
 	params.ProjectPayoutScript = []byte("PAC_TESTNET_3_OF_5_PROJECT_MULTISIG_SCRIPT")
 	return params
 }
@@ -59,6 +62,7 @@ func TestNetParams() *Params {
 func SimNetParams() *Params {
 	params := commonParams("simnet", "S", "29508", 0x3f, 0x3f, 0x207fffff, 0x207fffff, 255)
 	params.ASERTHalfLife = 10 * time.Minute
+	params.CoinbaseMaturity = 2
 	params.ProjectPayoutScript = []byte("PAC_SIMNET_3_OF_5_PROJECT_MULTISIG_SCRIPT")
 	return params
 }
@@ -84,6 +88,7 @@ func commonParams(name, addressPrefix, defaultPort string, pubKeyHashAddrID, scr
 		MulSubsidy:           100,
 		DivSubsidy:           101,
 		ReductionInterval:    12_288,
+		CoinbaseMaturity:     100,
 		MinerRewardPercent:   95,
 		ProjectRewardPercent: 5,
 		ProjectMultisigM:     3,

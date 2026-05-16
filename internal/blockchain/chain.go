@@ -14,14 +14,20 @@ import (
 type Chain struct {
 	params *chaincfg.Params
 	blocks []*wire.MsgBlock
-	utxos  map[wire.OutPoint]*wire.TxOut
+	utxos  map[wire.OutPoint]*UTXOEntry
+}
+
+type UTXOEntry struct {
+	TxOut       wire.TxOut
+	BlockHeight uint32
+	Coinbase    bool
 }
 
 func New(params *chaincfg.Params) *Chain {
 	return &Chain{
 		params: params,
 		blocks: []*wire.MsgBlock{params.GenesisBlock},
-		utxos:  make(map[wire.OutPoint]*wire.TxOut),
+		utxos:  make(map[wire.OutPoint]*UTXOEntry),
 	}
 }
 
@@ -74,7 +80,7 @@ func (c *Chain) LookupUTXO(outpoint wire.OutPoint) (wire.TxOut, bool) {
 	if !ok {
 		return wire.TxOut{}, false
 	}
-	return cloneTxOut(txOut), true
+	return cloneTxOut(&txOut.TxOut), true
 }
 
 func (c *Chain) ExpectedBits(nextHeight uint32) uint32 {
@@ -103,11 +109,11 @@ func (c *Chain) ValidateBlock(block *wire.MsgBlock) error {
 }
 
 func (c *Chain) CalcFees(txs []*wire.MsgTx) (int64, error) {
-	fees, _, err := c.validateRegularTransactions(txs, cloneUTXOSet(c.utxos))
+	fees, _, err := c.validateRegularTransactions(txs, cloneUTXOSet(c.utxos), c.Height()+1)
 	return fees, err
 }
 
-func (c *Chain) validateBlock(block *wire.MsgBlock) (map[wire.OutPoint]*wire.TxOut, error) {
+func (c *Chain) validateBlock(block *wire.MsgBlock) (map[wire.OutPoint]*UTXOEntry, error) {
 	if len(block.Transactions) == 0 {
 		return nil, fmt.Errorf("block has no transactions")
 	}
@@ -144,17 +150,17 @@ func (c *Chain) validateBlock(block *wire.MsgBlock) (map[wire.OutPoint]*wire.TxO
 	}
 
 	nextUTXOs := cloneUTXOSet(c.utxos)
-	fees, nextUTXOs, err := c.validateRegularTransactions(block.Transactions[1:], nextUTXOs)
+	fees, nextUTXOs, err := c.validateRegularTransactions(block.Transactions[1:], nextUTXOs, expectedHeight)
 	if err != nil {
 		return nil, err
 	}
-	if err := c.validateAndConnectCoinbase(block, fees, nextUTXOs); err != nil {
+	if err := c.validateAndConnectCoinbase(block, fees, nextUTXOs, expectedHeight); err != nil {
 		return nil, err
 	}
 	return nextUTXOs, nil
 }
 
-func (c *Chain) validateAndConnectCoinbase(block *wire.MsgBlock, fees int64, view map[wire.OutPoint]*wire.TxOut) error {
+func (c *Chain) validateAndConnectCoinbase(block *wire.MsgBlock, fees int64, view map[wire.OutPoint]*UTXOEntry, blockHeight uint32) error {
 	if len(block.Transactions) == 0 {
 		return fmt.Errorf("block has no transactions")
 	}
@@ -196,17 +202,17 @@ func (c *Chain) validateAndConnectCoinbase(block *wire.MsgBlock, fees int64, vie
 	if !bytes.Equal(coinbase.TxOut[1].PkScript, c.params.ProjectPayoutScript) {
 		return fmt.Errorf("project payout script mismatch")
 	}
-	connectTxOutputs(coinbase, view)
+	connectTxOutputs(coinbase, view, blockHeight, true)
 	return nil
 }
 
-func (c *Chain) validateRegularTransactions(txs []*wire.MsgTx, view map[wire.OutPoint]*wire.TxOut) (int64, map[wire.OutPoint]*wire.TxOut, error) {
+func (c *Chain) validateRegularTransactions(txs []*wire.MsgTx, view map[wire.OutPoint]*UTXOEntry, spendHeight uint32) (int64, map[wire.OutPoint]*UTXOEntry, error) {
 	var totalFees int64
 	for txIndex, tx := range txs {
 		if tx.IsCoinbase() {
 			return 0, nil, fmt.Errorf("extra coinbase transaction at index %d", txIndex+1)
 		}
-		fee, err := validateAndConnectRegularTx(tx, view)
+		fee, err := c.validateAndConnectRegularTx(tx, view, spendHeight)
 		if err != nil {
 			return 0, nil, fmt.Errorf("transaction %d: %w", txIndex+1, err)
 		}
@@ -218,7 +224,7 @@ func (c *Chain) validateRegularTransactions(txs []*wire.MsgTx, view map[wire.Out
 	return totalFees, view, nil
 }
 
-func validateAndConnectRegularTx(tx *wire.MsgTx, view map[wire.OutPoint]*wire.TxOut) (int64, error) {
+func (c *Chain) validateAndConnectRegularTx(tx *wire.MsgTx, view map[wire.OutPoint]*UTXOEntry, spendHeight uint32) (int64, error) {
 	if len(tx.TxIn) == 0 {
 		return 0, fmt.Errorf("regular transaction has no inputs")
 	}
@@ -241,20 +247,23 @@ func validateAndConnectRegularTx(tx *wire.MsgTx, view map[wire.OutPoint]*wire.Tx
 		if !ok {
 			return 0, fmt.Errorf("missing input %s:%d", outpoint.Hash, outpoint.Index)
 		}
-		if err := txscript.VerifyP2PKHInput(tx, inputIndex, prevOut.PkScript); err != nil {
+		if prevOut.Coinbase && spendHeight < prevOut.BlockHeight+c.params.CoinbaseMaturity {
+			return 0, fmt.Errorf("coinbase input %s:%d is immature until height %d", outpoint.Hash, outpoint.Index, prevOut.BlockHeight+c.params.CoinbaseMaturity)
+		}
+		if err := txscript.VerifyP2PKHInput(tx, inputIndex, prevOut.TxOut.PkScript); err != nil {
 			return 0, fmt.Errorf("input %d: %w", inputIndex, err)
 		}
-		if inputTotal > math.MaxInt64-prevOut.Value {
+		if inputTotal > math.MaxInt64-prevOut.TxOut.Value {
 			return 0, fmt.Errorf("input value overflow")
 		}
-		inputTotal += prevOut.Value
+		inputTotal += prevOut.TxOut.Value
 		delete(view, outpoint)
 	}
 
 	if inputTotal < outputTotal {
 		return 0, fmt.Errorf("input value %d is less than output value %d", inputTotal, outputTotal)
 	}
-	connectTxOutputs(tx, view)
+	connectTxOutputs(tx, view, spendHeight, false)
 	return inputTotal - outputTotal, nil
 }
 
@@ -275,7 +284,7 @@ func validateTxOutputs(tx *wire.MsgTx) (int64, error) {
 	return total, nil
 }
 
-func connectTxOutputs(tx *wire.MsgTx, view map[wire.OutPoint]*wire.TxOut) {
+func connectTxOutputs(tx *wire.MsgTx, view map[wire.OutPoint]*UTXOEntry, blockHeight uint32, coinbase bool) {
 	txHash := tx.MustTxHash()
 	for i, txOut := range tx.TxOut {
 		if txOut.Value == 0 {
@@ -284,21 +293,31 @@ func connectTxOutputs(tx *wire.MsgTx, view map[wire.OutPoint]*wire.TxOut) {
 		view[wire.OutPoint{
 			Hash:  txHash,
 			Index: uint32(i),
-		}] = cloneTxOutPtr(txOut)
+		}] = &UTXOEntry{
+			TxOut:       cloneTxOut(txOut),
+			BlockHeight: blockHeight,
+			Coinbase:    coinbase,
+		}
 	}
 }
 
-func cloneUTXOSet(utxos map[wire.OutPoint]*wire.TxOut) map[wire.OutPoint]*wire.TxOut {
-	cloned := make(map[wire.OutPoint]*wire.TxOut, len(utxos))
-	for outpoint, txOut := range utxos {
-		cloned[outpoint] = cloneTxOutPtr(txOut)
+func cloneUTXOSet(utxos map[wire.OutPoint]*UTXOEntry) map[wire.OutPoint]*UTXOEntry {
+	cloned := make(map[wire.OutPoint]*UTXOEntry, len(utxos))
+	for outpoint, entry := range utxos {
+		cloned[outpoint] = cloneUTXOEntry(entry)
 	}
 	return cloned
 }
 
-func cloneTxOutPtr(txOut *wire.TxOut) *wire.TxOut {
-	cloned := cloneTxOut(txOut)
-	return &cloned
+func cloneUTXOEntry(entry *UTXOEntry) *UTXOEntry {
+	if entry == nil {
+		return nil
+	}
+	return &UTXOEntry{
+		TxOut:       cloneTxOut(&entry.TxOut),
+		BlockHeight: entry.BlockHeight,
+		Coinbase:    entry.Coinbase,
+	}
 }
 
 func cloneTxOut(txOut *wire.TxOut) wire.TxOut {

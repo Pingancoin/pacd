@@ -43,6 +43,9 @@ func TestMainNetAddressesStartWithP(t *testing.T) {
 	if len(pubKeyScript) != 25 {
 		t.Fatalf("p2pkh script length = %d", len(pubKeyScript))
 	}
+	if got, ok := address.AddressFromPkScript(params, pubKeyScript); !ok || got != pubKeyAddr {
+		t.Fatalf("AddressFromPkScript p2pkh = %s, %v", got, ok)
+	}
 
 	scriptAddr, err := address.ScriptHashAddress(params, payload)
 	if err != nil {
@@ -57,6 +60,9 @@ func TestMainNetAddressesStartWithP(t *testing.T) {
 	}
 	if len(scriptScript) != 23 {
 		t.Fatalf("p2sh script length = %d", len(scriptScript))
+	}
+	if got, ok := address.AddressFromPkScript(params, scriptScript); !ok || got != scriptAddr {
+		t.Fatalf("AddressFromPkScript p2sh = %s, %v", got, ok)
 	}
 }
 
