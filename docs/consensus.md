@@ -10,7 +10,8 @@
 
 The address encoder is scheduled for the wallet milestone. The chain core
 already treats the project payout as a consensus script, not a mutable runtime
-configuration value.
+configuration value. Mainnet P2PKH and P2SH addresses use Base58Check version
+bytes selected to produce `P...` addresses.
 
 ## Genesis
 

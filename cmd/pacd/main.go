@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Pingancoin/pacd/internal/address"
 	"github.com/Pingancoin/pacd/internal/blockchain"
 	"github.com/Pingancoin/pacd/internal/blockstore"
 	"github.com/Pingancoin/pacd/internal/chaincfg"
@@ -21,6 +23,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "address" {
+		if err := runAddressCommand(os.Args[2:]); err != nil {
+			exit(err)
+		}
+		return
+	}
+
 	network := flag.String("network", "simnet", "network to use: mainnet, testnet, simnet")
 	printParams := flag.Bool("printparams", false, "print consensus parameters")
 	mineTo := flag.String("mine", "", "mine to a miner payout script/address label")
@@ -101,6 +110,92 @@ func main() {
 	if *rpc {
 		runRPC(chain, store, *rpcListen)
 	}
+}
+
+func runAddressCommand(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("address subcommand required: pubkey or multisig")
+	}
+	switch args[0] {
+	case "pubkey":
+		return runPubKeyAddressCommand(args[1:])
+	case "multisig":
+		return runMultiSigAddressCommand(args[1:])
+	default:
+		return fmt.Errorf("unknown address subcommand %q", args[0])
+	}
+}
+
+func runPubKeyAddressCommand(args []string) error {
+	flags := flag.NewFlagSet("pacd address pubkey", flag.ContinueOnError)
+	network := flags.String("network", "mainnet", "network to use: mainnet, testnet, simnet")
+	pubKeyHex := flags.String("pubkey", "", "compressed or uncompressed public key hex")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	params, err := selectParams(*network)
+	if err != nil {
+		return err
+	}
+	pubKey, err := hex.DecodeString(*pubKeyHex)
+	if err != nil {
+		return fmt.Errorf("invalid pubkey hex: %w", err)
+	}
+	addr, pubKeyHash, pkScript, err := address.AddressFromPubKey(params, pubKey)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("network: %s\n", params.Name)
+	fmt.Printf("address: %s\n", addr)
+	fmt.Printf("pubkey_hash: %s\n", hex.EncodeToString(pubKeyHash))
+	fmt.Printf("p2pkh_script: %s\n", hex.EncodeToString(pkScript))
+	return nil
+}
+
+func runMultiSigAddressCommand(args []string) error {
+	var pubKeys pubKeyList
+	flags := flag.NewFlagSet("pacd address multisig", flag.ContinueOnError)
+	network := flags.String("network", "mainnet", "network to use: mainnet, testnet, simnet")
+	required := flags.Int("required", 3, "required signatures")
+	flags.Var(&pubKeys, "pubkey", "compressed or uncompressed public key hex; repeat for each key")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	params, err := selectParams(*network)
+	if err != nil {
+		return err
+	}
+	script, err := address.MultiSigRedeemScript(*required, pubKeys)
+	if err != nil {
+		return err
+	}
+	addr, scriptHash, pkScript, err := address.AddressFromScript(params, script)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("network: %s\n", params.Name)
+	fmt.Printf("address: %s\n", addr)
+	fmt.Printf("required: %d\n", *required)
+	fmt.Printf("pubkeys: %d\n", len(pubKeys))
+	fmt.Printf("script_hash: %s\n", hex.EncodeToString(scriptHash))
+	fmt.Printf("redeem_script: %s\n", hex.EncodeToString(script))
+	fmt.Printf("p2sh_script: %s\n", hex.EncodeToString(pkScript))
+	return nil
+}
+
+type pubKeyList [][]byte
+
+func (p *pubKeyList) String() string {
+	return fmt.Sprintf("%d pubkey(s)", len(*p))
+}
+
+func (p *pubKeyList) Set(value string) error {
+	pubKey, err := hex.DecodeString(value)
+	if err != nil {
+		return err
+	}
+	*p = append(*p, pubKey)
+	return nil
 }
 
 func selectParams(network string) (*chaincfg.Params, error) {

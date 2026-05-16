@@ -20,6 +20,8 @@ type Params struct {
 	Ticker               string
 	DefaultPort          string
 	AddressPrefix        string
+	PubKeyHashAddrID     byte
+	ScriptHashAddrID     byte
 	GenesisBlock         *wire.MsgBlock
 	GenesisHash          wire.Hash
 	PowLimit             *big.Int
@@ -39,25 +41,25 @@ type Params struct {
 }
 
 func MainNetParams() *Params {
-	params := commonParams("mainnet", "P", "9508", 0x1d00ffff, 0x1b01ffff, 224)
+	params := commonParams("mainnet", "P", "9508", 0x37, 0x38, 0x1d00ffff, 0x1b01ffff, 224)
 	params.ProjectPayoutScript = []byte(PlaceholderProjectPayoutScript)
 	return params
 }
 
 func TestNetParams() *Params {
-	params := commonParams("testnet", "T", "19508", 0x207fffff, 0x207fffff, 255)
+	params := commonParams("testnet", "T", "19508", 0x41, 0x42, 0x207fffff, 0x207fffff, 255)
 	params.ProjectPayoutScript = []byte("PAC_TESTNET_3_OF_5_PROJECT_MULTISIG_SCRIPT")
 	return params
 }
 
 func SimNetParams() *Params {
-	params := commonParams("simnet", "S", "29508", 0x207fffff, 0x207fffff, 255)
+	params := commonParams("simnet", "S", "29508", 0x3f, 0x3f, 0x207fffff, 0x207fffff, 255)
 	params.ASERTHalfLife = 10 * time.Minute
 	params.ProjectPayoutScript = []byte("PAC_SIMNET_3_OF_5_PROJECT_MULTISIG_SCRIPT")
 	return params
 }
 
-func commonParams(name, addressPrefix, defaultPort string, powLimitBits, genesisBits uint32, powLimitShift uint) *Params {
+func commonParams(name, addressPrefix, defaultPort string, pubKeyHashAddrID, scriptHashAddrID byte, powLimitBits, genesisBits uint32, powLimitShift uint) *Params {
 	powLimit := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), powLimitShift), big.NewInt(1))
 	genesisBlock := genesisBlock(genesisBits)
 
@@ -66,6 +68,8 @@ func commonParams(name, addressPrefix, defaultPort string, powLimitBits, genesis
 		Ticker:               "PAC",
 		DefaultPort:          defaultPort,
 		AddressPrefix:        addressPrefix,
+		PubKeyHashAddrID:     pubKeyHashAddrID,
+		ScriptHashAddrID:     scriptHashAddrID,
 		GenesisBlock:         genesisBlock,
 		PowLimit:             powLimit,
 		PowLimitBits:         powLimitBits,

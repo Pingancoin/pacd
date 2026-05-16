@@ -45,13 +45,26 @@ docs/                 project design notes
 
 ## Try It
 
-This workspace does not currently have Go installed. Once Go 1.22+ is
-available:
+Use Go 1.25+:
 
 ```bash
 go test ./...
 go run ./cmd/pacd --network simnet --printparams
 go run ./cmd/pacd --network simnet --mine PsimMiner --blocks 3
+```
+
+Generate a mainnet `P...` address from a compressed public key:
+
+```bash
+go run ./cmd/pacd address pubkey --network mainnet --pubkey <compressed-pubkey-hex>
+```
+
+Generate the project development 3-of-5 multisig P2SH address:
+
+```bash
+go run ./cmd/pacd address multisig --network mainnet --required 3 \
+  --pubkey <pubkey1-hex> --pubkey <pubkey2-hex> --pubkey <pubkey3-hex> \
+  --pubkey <pubkey4-hex> --pubkey <pubkey5-hex>
 ```
 
 Mainnet launch requires replacing the placeholder project payout script with
