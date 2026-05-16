@@ -22,6 +22,7 @@ pool, and full P2P/RPC surfaces are added.
 | Coinbase split | 95% miner, 5% project development multisig |
 | First normal block split | 16.07462662 PAC miner / 0.84603299 PAC project |
 | Coinbase maturity | 100 blocks on mainnet/testnet, 2 blocks on simnet |
+| Mainnet DNS seeds | `server1.pingancoin.org`, `server2.pingancoin.org`, `server3.pingancoin.org`, `server4.pingancoin.org` |
 | Premine | 0 |
 | Genesis time | 2026-06-01 00:00:00 UTC |
 | Genesis message | `Pingancoin PAC genesis: pure PoW, no premine, BLAKE-256 r14, 2026-06-01` |
@@ -137,8 +138,10 @@ go run ./cmd/pacd --network simnet --p2p --listen 127.0.0.1:29509 --connect 127.
 ```
 
 The current P2P milestone covers message framing, network magic checks,
-payload checksums, version/verack handshake, ping/pong, connection limits, and
-peer tracking. Header-first sync and block relay are the next P2P layer.
+payload checksums, version/verack handshake, ping/pong, connection limits, peer
+tracking, header-first synchronization, block requests, block validation, and
+block persistence. Future P2P layers should add inventory relay, peer address
+gossip, ban scores, orphan handling, and parallel block download.
 
 ## Supply Note
 

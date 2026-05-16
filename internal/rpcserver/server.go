@@ -28,15 +28,23 @@ type Server struct {
 	chain   *blockchain.Chain
 	store   *blockstore.Store
 	mux     *http.ServeMux
-	mu      sync.Mutex
+	mu      *sync.Mutex
 	mempool []*wire.MsgTx
 }
 
 func New(chain *blockchain.Chain, store *blockstore.Store) *Server {
+	return NewWithLock(chain, store, &sync.Mutex{})
+}
+
+func NewWithLock(chain *blockchain.Chain, store *blockstore.Store, mu *sync.Mutex) *Server {
+	if mu == nil {
+		mu = &sync.Mutex{}
+	}
 	server := &Server{
 		chain: chain,
 		store: store,
 		mux:   http.NewServeMux(),
+		mu:    mu,
 	}
 	server.mux.HandleFunc("/", server.handleIndex)
 	server.mux.HandleFunc("/getblockcount", server.handleGetBlockCount)

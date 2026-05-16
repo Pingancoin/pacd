@@ -31,6 +31,8 @@
 - Add wallet-facing transaction and address UTXO lookup RPC methods.
 - Add P2P peer management, version/verack handshake, ping/pong, and DNS seeds.
 - Add header-first sync and block relay.
+- Add inventory relay, peer address gossip, ban scores, orphan handling, and
+  parallel block download.
 
 ## Phase 4: Explorer
 

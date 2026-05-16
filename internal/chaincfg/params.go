@@ -20,6 +20,7 @@ type Params struct {
 	Ticker               string
 	DefaultPort          string
 	NetworkMagic         uint32
+	DNSSeeds             []string
 	AddressPrefix        string
 	PubKeyHashAddrID     byte
 	ScriptHashAddrID     byte
@@ -45,6 +46,12 @@ type Params struct {
 func MainNetParams() *Params {
 	params := commonParams("mainnet", "P", "9508", 0xfacec001, 0x37, 0x38, 0x1d00ffff, 0x1b01ffff, 224)
 	params.CoinbaseMaturity = 100
+	params.DNSSeeds = []string{
+		"server1.pingancoin.org",
+		"server2.pingancoin.org",
+		"server3.pingancoin.org",
+		"server4.pingancoin.org",
+	}
 	params.ProjectPayoutScript = []byte(PlaceholderProjectPayoutScript)
 	return params
 }

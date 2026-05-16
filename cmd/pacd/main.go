@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -297,6 +298,9 @@ func printConsensusParams(params *chaincfg.Params) {
 	fmt.Printf("coinbase maturity: %d block(s)\n", params.CoinbaseMaturity)
 	fmt.Printf("coinbase split: %d%% miner / %d%% project\n", params.MinerRewardPercent, params.ProjectRewardPercent)
 	fmt.Printf("project multisig: %d-of-%d\n", params.ProjectMultisigM, params.ProjectMultisigN)
+	if len(params.DNSSeeds) > 0 {
+		fmt.Printf("dns seeds: %s\n", strings.Join(params.DNSSeeds, ","))
+	}
 }
 
 func defaultDataDir() string {
@@ -375,11 +379,12 @@ func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bo
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	chainMu := &sync.Mutex{}
 	errCh := make(chan error, 2)
 	if rpcEnabled {
 		fmt.Printf("rpc listening on http://%s\n", rpcListen)
 		go func() {
-			errCh <- rpcserver.New(chain, store).ListenAndServe(ctx, rpcListen)
+			errCh <- rpcserver.NewWithLock(chain, store, chainMu).ListenAndServe(ctx, rpcListen)
 		}()
 	}
 	if p2pEnabled {
@@ -387,20 +392,26 @@ func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bo
 		if listen == "" {
 			listen = "127.0.0.1:" + chain.Params().DefaultPort
 		}
+		peers := append([]string(nil), connectPeers...)
+		if len(peers) == 0 {
+			peers = seedPeers(chain.Params())
+		}
 		node, err := p2p.NewNode(p2p.Config{
 			Params:     chain.Params(),
 			ListenAddr: listen,
-			Connect:    connectPeers,
+			Connect:    peers,
 			MaxPeers:   maxPeers,
-			BestHeight: chain.Height,
+			Chain:      chain,
+			Store:      store,
+			ChainMu:    chainMu,
 			Logger:     log.New(os.Stdout, "", 0),
 		})
 		if err != nil {
 			exit(err)
 		}
 		fmt.Printf("p2p listening on %s\n", listen)
-		if len(connectPeers) > 0 {
-			fmt.Printf("p2p connecting to %s\n", strings.Join(connectPeers, ","))
+		if len(peers) > 0 {
+			fmt.Printf("p2p connecting to %s\n", strings.Join(peers, ","))
 		}
 		go func() {
 			errCh <- node.Start(ctx)
@@ -415,6 +426,18 @@ func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bo
 			exit(err)
 		}
 	}
+}
+
+func seedPeers(params *chaincfg.Params) []string {
+	peers := make([]string, 0, len(params.DNSSeeds))
+	for _, seed := range params.DNSSeeds {
+		if strings.Contains(seed, ":") {
+			peers = append(peers, seed)
+			continue
+		}
+		peers = append(peers, seed+":"+params.DefaultPort)
+	}
+	return peers
 }
 
 func formatPAC(atoms int64) string {

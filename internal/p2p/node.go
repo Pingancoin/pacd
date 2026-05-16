@@ -11,7 +11,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Pingancoin/pacd/internal/blockchain"
+	"github.com/Pingancoin/pacd/internal/blockstore"
 	"github.com/Pingancoin/pacd/internal/chaincfg"
+	"github.com/Pingancoin/pacd/internal/consensus"
+	"github.com/Pingancoin/pacd/internal/wire"
 )
 
 const (
@@ -26,6 +30,9 @@ type Config struct {
 	Connect    []string
 	MaxPeers   int
 	BestHeight func() uint32
+	Chain      *blockchain.Chain
+	Store      *blockstore.Store
+	ChainMu    *sync.Mutex
 	UserAgent  string
 	Logger     *log.Logger
 }
@@ -191,14 +198,20 @@ func (n *Node) handleConn(ctx context.Context, conn net.Conn, inbound bool) {
 		ConnectedAt: time.Now().UTC(),
 	})
 	n.logf("p2p connected %s inbound=%t height=%d agent=%s", addr, inbound, remoteVersion.BestHeight, remoteVersion.UserAgent)
-	n.readLoop(ctx, conn)
+	if remoteVersion.BestHeight > n.bestHeight() {
+		if err := n.sendGetHeaders(conn); err != nil {
+			n.logf("p2p getheaders %s failed: %v", addr, err)
+			return
+		}
+	}
+	n.readLoop(ctx, conn, addr)
 }
 
 func (n *Node) handshake(conn net.Conn, inbound bool) (Version, error) {
 	if err := conn.SetDeadline(time.Now().Add(defaultHandshakeTimeout)); err != nil {
 		return Version{}, err
 	}
-	localVersion := NewVersion(n.cfg.Params.Name, n.cfg.Params.GenesisHash, n.cfg.BestHeight(), n.nonce, n.cfg.UserAgent)
+	localVersion := NewVersion(n.cfg.Params.Name, n.cfg.Params.GenesisHash, n.bestHeight(), n.nonce, n.cfg.UserAgent)
 	localPayload, err := localVersion.Serialize()
 	if err != nil {
 		return Version{}, err
@@ -278,7 +291,7 @@ func (n *Node) expectCommand(conn net.Conn, command string) error {
 	return nil
 }
 
-func (n *Node) readLoop(ctx context.Context, conn net.Conn) {
+func (n *Node) readLoop(ctx context.Context, conn net.Conn, addr string) {
 	for {
 		if err := conn.SetReadDeadline(time.Now().Add(defaultIdleTimeout)); err != nil {
 			return
@@ -291,12 +304,233 @@ func (n *Node) readLoop(ctx context.Context, conn net.Conn) {
 		case CommandPing:
 			_ = WriteMessage(conn, n.cfg.Params.NetworkMagic, Message{Command: CommandPong, Payload: msg.Payload})
 		case CommandPong:
+		case CommandGetHeaders:
+			if err := n.handleGetHeaders(conn, msg.Payload); err != nil {
+				n.logf("p2p getheaders from %s failed: %v", addr, err)
+				return
+			}
+		case CommandHeaders:
+			if err := n.handleHeaders(conn, msg.Payload); err != nil {
+				n.logf("p2p headers from %s failed: %v", addr, err)
+				return
+			}
+		case CommandGetBlocks:
+			if err := n.handleGetBlocks(conn, msg.Payload); err != nil {
+				n.logf("p2p getblocks from %s failed: %v", addr, err)
+				return
+			}
+		case CommandBlock:
+			if err := n.handleBlock(conn, addr, msg.Payload); err != nil {
+				n.logf("p2p block from %s failed: %v", addr, err)
+				return
+			}
 		default:
 			n.logf("p2p ignored command %q from %s", msg.Command, conn.RemoteAddr())
 		}
 		if ctx.Err() != nil {
 			return
 		}
+	}
+}
+
+func (n *Node) handleGetHeaders(conn net.Conn, payload []byte) error {
+	req, err := DeserializeGetHeaders(payload)
+	if err != nil {
+		return err
+	}
+	headers := n.headersAfter(req.StartHeight)
+	serialized, err := (Headers{Headers: headers}).Serialize()
+	if err != nil {
+		return err
+	}
+	return WriteMessage(conn, n.cfg.Params.NetworkMagic, Message{Command: CommandHeaders, Payload: serialized})
+}
+
+func (n *Node) handleHeaders(conn net.Conn, payload []byte) error {
+	headers, err := DeserializeHeaders(payload)
+	if err != nil {
+		return err
+	}
+	if len(headers.Headers) == 0 {
+		return nil
+	}
+	hashes, err := n.validateHeaderChain(headers.Headers)
+	if err != nil {
+		return err
+	}
+	if len(hashes) == 0 {
+		return nil
+	}
+	serialized, err := (GetBlocks{Hashes: hashes}).Serialize()
+	if err != nil {
+		return err
+	}
+	return WriteMessage(conn, n.cfg.Params.NetworkMagic, Message{Command: CommandGetBlocks, Payload: serialized})
+}
+
+func (n *Node) handleGetBlocks(conn net.Conn, payload []byte) error {
+	req, err := DeserializeGetBlocks(payload)
+	if err != nil {
+		return err
+	}
+	for _, hash := range req.Hashes {
+		block, ok := n.blockByHash(hash)
+		if !ok {
+			continue
+		}
+		serialized, err := block.Serialize()
+		if err != nil {
+			return err
+		}
+		if err := WriteMessage(conn, n.cfg.Params.NetworkMagic, Message{Command: CommandBlock, Payload: serialized}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (n *Node) handleBlock(conn net.Conn, addr string, payload []byte) error {
+	block, err := wire.DeserializeBlock(payload)
+	if err != nil {
+		return err
+	}
+	connected, err := n.connectBlock(block)
+	if err != nil {
+		return err
+	}
+	if connected {
+		n.logf("p2p connected block height=%d hash=%s", block.Header.Height, block.MustBlockHash())
+	}
+	if info, ok := n.peerInfo(addr); ok && info.BestHeight > n.bestHeight() {
+		return n.sendGetHeaders(conn)
+	}
+	return nil
+}
+
+func (n *Node) sendGetHeaders(conn net.Conn) error {
+	payload, err := (GetHeaders{StartHeight: n.bestHeight()}).Serialize()
+	if err != nil {
+		return err
+	}
+	return WriteMessage(conn, n.cfg.Params.NetworkMagic, Message{Command: CommandGetHeaders, Payload: payload})
+}
+
+func (n *Node) headersAfter(startHeight uint32) []wire.BlockHeader {
+	n.lockChain()
+	defer n.unlockChain()
+	if n.cfg.Chain == nil {
+		return nil
+	}
+	blocks := n.cfg.Chain.Blocks()
+	if int(startHeight)+1 >= len(blocks) {
+		return nil
+	}
+	end := len(blocks)
+	if end > int(startHeight)+1+MaxHeadersPerMessage {
+		end = int(startHeight) + 1 + MaxHeadersPerMessage
+	}
+	headers := make([]wire.BlockHeader, 0, end-int(startHeight)-1)
+	for _, block := range blocks[startHeight+1 : end] {
+		headers = append(headers, block.Header)
+	}
+	return headers
+}
+
+func (n *Node) validateHeaderChain(headers []wire.BlockHeader) ([]wire.Hash, error) {
+	n.lockChain()
+	defer n.unlockChain()
+	if n.cfg.Chain == nil {
+		return nil, nil
+	}
+	expectedHeight := n.cfg.Chain.Height() + 1
+	prevHash := n.cfg.Chain.Tip().MustBlockHash()
+	prevTime := n.cfg.Chain.Tip().Header.Timestamp
+	hashes := make([]wire.Hash, 0, len(headers))
+	for _, header := range headers {
+		if header.Height < expectedHeight {
+			continue
+		}
+		if header.Height != expectedHeight {
+			return nil, fmt.Errorf("header height %d does not extend expected %d", header.Height, expectedHeight)
+		}
+		if header.PrevBlock != prevHash {
+			return nil, fmt.Errorf("header previous hash mismatch at height %d", header.Height)
+		}
+		if header.Timestamp <= prevTime {
+			return nil, fmt.Errorf("header timestamp must increase at height %d", header.Height)
+		}
+		expectedBits := consensus.CalcASERTNextBits(
+			n.cfg.Params.GenesisBlock.Header.Bits,
+			n.cfg.Params.GenesisBlock.Header.Timestamp,
+			prevTime,
+			int64(header.Height),
+			n.cfg.Params,
+		)
+		if header.Bits != expectedBits {
+			return nil, fmt.Errorf("header bits %08x do not match expected %08x at height %d", header.Bits, expectedBits, header.Height)
+		}
+		if err := consensus.CheckProofOfWork(&header, n.cfg.Params); err != nil {
+			return nil, err
+		}
+		hash := header.MustBlockHash()
+		hashes = append(hashes, hash)
+		prevHash = hash
+		prevTime = header.Timestamp
+		expectedHeight++
+	}
+	return hashes, nil
+}
+
+func (n *Node) blockByHash(hash wire.Hash) (*wire.MsgBlock, bool) {
+	n.lockChain()
+	defer n.unlockChain()
+	if n.cfg.Chain == nil {
+		return nil, false
+	}
+	return n.cfg.Chain.BlockByHash(hash)
+}
+
+func (n *Node) connectBlock(block *wire.MsgBlock) (bool, error) {
+	n.lockChain()
+	defer n.unlockChain()
+	if n.cfg.Chain == nil {
+		return false, nil
+	}
+	if block.Header.Height <= n.cfg.Chain.Height() {
+		if existing, ok := n.cfg.Chain.BlockByHeight(block.Header.Height); ok && existing.MustBlockHash() == block.MustBlockHash() {
+			return false, nil
+		}
+		return false, fmt.Errorf("stale or conflicting block at height %d", block.Header.Height)
+	}
+	if err := n.cfg.Chain.AddBlock(block); err != nil {
+		return false, err
+	}
+	if n.cfg.Store != nil {
+		if err := n.cfg.Store.Append(block); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func (n *Node) bestHeight() uint32 {
+	n.lockChain()
+	defer n.unlockChain()
+	if n.cfg.Chain != nil {
+		return n.cfg.Chain.Height()
+	}
+	return n.cfg.BestHeight()
+}
+
+func (n *Node) lockChain() {
+	if n.cfg.ChainMu != nil {
+		n.cfg.ChainMu.Lock()
+	}
+}
+
+func (n *Node) unlockChain() {
+	if n.cfg.ChainMu != nil {
+		n.cfg.ChainMu.Unlock()
 	}
 }
 
@@ -323,6 +557,13 @@ func (n *Node) removePeer(addr string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	delete(n.peers, addr)
+}
+
+func (n *Node) peerInfo(addr string) (PeerInfo, bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	info, ok := n.peers[addr]
+	return info, ok
 }
 
 func (n *Node) logf(format string, args ...any) {

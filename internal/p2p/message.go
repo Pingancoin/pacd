@@ -15,10 +15,14 @@ const (
 	commandSize    = 12
 	MaxPayloadSize = 1 << 20
 
-	CommandVersion = "version"
-	CommandVerAck  = "verack"
-	CommandPing    = "ping"
-	CommandPong    = "pong"
+	CommandVersion    = "version"
+	CommandVerAck     = "verack"
+	CommandPing       = "ping"
+	CommandPong       = "pong"
+	CommandGetHeaders = "getheaders"
+	CommandHeaders    = "headers"
+	CommandGetBlocks  = "getblocks"
+	CommandBlock      = "block"
 )
 
 type Message struct {

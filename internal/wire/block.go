@@ -111,6 +111,18 @@ func DeserializeBlock(serialized []byte) (*MsgBlock, error) {
 	return block, nil
 }
 
+func DeserializeBlockHeader(serialized []byte) (BlockHeader, error) {
+	reader := bytes.NewReader(serialized)
+	header, err := deserializeBlockHeader(reader)
+	if err != nil {
+		return BlockHeader{}, err
+	}
+	if reader.Len() != 0 {
+		return BlockHeader{}, fmt.Errorf("block header has %d trailing byte(s)", reader.Len())
+	}
+	return header, nil
+}
+
 func deserializeBlockHeader(reader *bytes.Reader) (BlockHeader, error) {
 	var header BlockHeader
 	if err := binary.Read(reader, binary.LittleEndian, &header.Version); err != nil {
