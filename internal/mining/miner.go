@@ -2,6 +2,7 @@ package mining
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"time"
 
@@ -38,6 +39,10 @@ func NewCandidate(chain *blockchain.Chain, minerScript []byte, timestamp time.Ti
 }
 
 func MineBlock(chain *blockchain.Chain, minerScript []byte, timestamp time.Time, maxNonce uint32) (*wire.MsgBlock, error) {
+	if timestamp.Unix() <= chain.Tip().Header.Timestamp {
+		return nil, fmt.Errorf("timestamp %s must be after chain tip", timestamp.UTC().Format(time.RFC3339))
+	}
+
 	block, err := NewCandidate(chain, minerScript, timestamp)
 	if err != nil {
 		return nil, err

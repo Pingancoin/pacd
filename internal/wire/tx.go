@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 
 	"github.com/decred/dcrd/crypto/blake256"
 )
@@ -87,6 +88,62 @@ func (tx *MsgTx) Serialize() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+func DeserializeTx(serialized []byte) (*MsgTx, error) {
+	reader := bytes.NewReader(serialized)
+	tx := &MsgTx{}
+	if err := binary.Read(reader, binary.LittleEndian, &tx.Version); err != nil {
+		return nil, err
+	}
+
+	inputCount, err := readVarInt(reader)
+	if err != nil {
+		return nil, err
+	}
+	tx.TxIn = make([]*TxIn, 0, inputCount)
+	for i := uint64(0); i < inputCount; i++ {
+		in := &TxIn{}
+		if _, err := io.ReadFull(reader, in.PreviousOutPoint.Hash[:]); err != nil {
+			return nil, err
+		}
+		if err := binary.Read(reader, binary.LittleEndian, &in.PreviousOutPoint.Index); err != nil {
+			return nil, err
+		}
+		in.SignatureScript, err = readVarBytes(reader)
+		if err != nil {
+			return nil, err
+		}
+		if err := binary.Read(reader, binary.LittleEndian, &in.Sequence); err != nil {
+			return nil, err
+		}
+		tx.TxIn = append(tx.TxIn, in)
+	}
+
+	outputCount, err := readVarInt(reader)
+	if err != nil {
+		return nil, err
+	}
+	tx.TxOut = make([]*TxOut, 0, outputCount)
+	for i := uint64(0); i < outputCount; i++ {
+		out := &TxOut{}
+		if err := binary.Read(reader, binary.LittleEndian, &out.Value); err != nil {
+			return nil, err
+		}
+		out.PkScript, err = readVarBytes(reader)
+		if err != nil {
+			return nil, err
+		}
+		tx.TxOut = append(tx.TxOut, out)
+	}
+
+	if err := binary.Read(reader, binary.LittleEndian, &tx.LockTime); err != nil {
+		return nil, err
+	}
+	if reader.Len() != 0 {
+		return nil, fmt.Errorf("transaction has %d trailing byte(s)", reader.Len())
+	}
+	return tx, nil
+}
+
 func (tx *MsgTx) TxHash() (Hash, error) {
 	serialized, err := tx.Serialize()
 	if err != nil {
@@ -121,5 +178,49 @@ func writeVarInt(buf *bytes.Buffer, val uint64) {
 	default:
 		buf.WriteByte(0xff)
 		_ = binary.Write(buf, binary.LittleEndian, val)
+	}
+}
+
+func readVarBytes(reader *bytes.Reader) ([]byte, error) {
+	length, err := readVarInt(reader)
+	if err != nil {
+		return nil, err
+	}
+	if length > uint64(reader.Len()) {
+		return nil, fmt.Errorf("var bytes length %d exceeds remaining %d", length, reader.Len())
+	}
+	b := make([]byte, length)
+	if _, err := io.ReadFull(reader, b); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func readVarInt(reader *bytes.Reader) (uint64, error) {
+	prefix, err := reader.ReadByte()
+	if err != nil {
+		return 0, err
+	}
+	switch prefix {
+	case 0xfd:
+		var v uint16
+		if err := binary.Read(reader, binary.LittleEndian, &v); err != nil {
+			return 0, err
+		}
+		return uint64(v), nil
+	case 0xfe:
+		var v uint32
+		if err := binary.Read(reader, binary.LittleEndian, &v); err != nil {
+			return 0, err
+		}
+		return uint64(v), nil
+	case 0xff:
+		var v uint64
+		if err := binary.Read(reader, binary.LittleEndian, &v); err != nil {
+			return 0, err
+		}
+		return v, nil
+	default:
+		return uint64(prefix), nil
 	}
 }

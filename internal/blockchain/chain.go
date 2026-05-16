@@ -37,6 +37,16 @@ func (c *Chain) Blocks() []*wire.MsgBlock {
 	return append([]*wire.MsgBlock(nil), c.blocks...)
 }
 
+func (c *Chain) TotalSubsidy() int64 {
+	var total int64
+	for _, block := range c.blocks {
+		for _, txOut := range block.Transactions[0].TxOut {
+			total += txOut.Value
+		}
+	}
+	return total
+}
+
 func (c *Chain) ExpectedBits(nextHeight uint32) uint32 {
 	return consensus.CalcASERTNextBits(
 		c.params.GenesisBlock.Header.Bits,

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 
 	"github.com/decred/dcrd/crypto/blake256"
 )
@@ -59,6 +60,81 @@ func (h *BlockHeader) MustBlockHash() Hash {
 		panic(fmt.Sprintf("block hash failed: %v", err))
 	}
 	return hash
+}
+
+func (b *MsgBlock) Serialize() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	header, err := b.Header.Serialize()
+	if err != nil {
+		return nil, err
+	}
+	buf.Write(header)
+	writeVarInt(buf, uint64(len(b.Transactions)))
+	for _, tx := range b.Transactions {
+		serializedTx, err := tx.Serialize()
+		if err != nil {
+			return nil, err
+		}
+		writeVarBytes(buf, serializedTx)
+	}
+	return buf.Bytes(), nil
+}
+
+func DeserializeBlock(serialized []byte) (*MsgBlock, error) {
+	reader := bytes.NewReader(serialized)
+	header, err := deserializeBlockHeader(reader)
+	if err != nil {
+		return nil, err
+	}
+	txCount, err := readVarInt(reader)
+	if err != nil {
+		return nil, err
+	}
+	block := &MsgBlock{
+		Header:       header,
+		Transactions: make([]*MsgTx, 0, txCount),
+	}
+	for i := uint64(0); i < txCount; i++ {
+		serializedTx, err := readVarBytes(reader)
+		if err != nil {
+			return nil, err
+		}
+		tx, err := DeserializeTx(serializedTx)
+		if err != nil {
+			return nil, err
+		}
+		block.Transactions = append(block.Transactions, tx)
+	}
+	if reader.Len() != 0 {
+		return nil, fmt.Errorf("block has %d trailing byte(s)", reader.Len())
+	}
+	return block, nil
+}
+
+func deserializeBlockHeader(reader *bytes.Reader) (BlockHeader, error) {
+	var header BlockHeader
+	if err := binary.Read(reader, binary.LittleEndian, &header.Version); err != nil {
+		return header, err
+	}
+	if _, err := io.ReadFull(reader, header.PrevBlock[:]); err != nil {
+		return header, err
+	}
+	if _, err := io.ReadFull(reader, header.MerkleRoot[:]); err != nil {
+		return header, err
+	}
+	if err := binary.Read(reader, binary.LittleEndian, &header.Timestamp); err != nil {
+		return header, err
+	}
+	if err := binary.Read(reader, binary.LittleEndian, &header.Bits); err != nil {
+		return header, err
+	}
+	if err := binary.Read(reader, binary.LittleEndian, &header.Nonce); err != nil {
+		return header, err
+	}
+	if err := binary.Read(reader, binary.LittleEndian, &header.Height); err != nil {
+		return header, err
+	}
+	return header, nil
 }
 
 func (b *MsgBlock) BlockHash() (Hash, error) {

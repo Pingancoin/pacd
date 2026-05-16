@@ -62,6 +62,14 @@ func HashToBig(hash wire.Hash) *big.Int {
 	return new(big.Int).SetBytes(hash[:])
 }
 
+func DifficultyRatio(bits uint32, params *chaincfg.Params) *big.Rat {
+	target := CompactToBig(bits)
+	if target.Sign() <= 0 {
+		return new(big.Rat)
+	}
+	return new(big.Rat).SetFrac(params.PowLimit, target)
+}
+
 func CheckProofOfWork(header *wire.BlockHeader, params *chaincfg.Params) error {
 	target := CompactToBig(header.Bits)
 	if target.Sign() <= 0 {
