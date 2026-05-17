@@ -416,6 +416,8 @@ func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bo
 		if node != nil {
 			server.SetBlockConnectedCallback(node.RelayBlock)
 			server.SetTransactionAcceptedCallback(node.RelayTransaction)
+			server.SetPeerCallbacks(peerSnapshots(node), node.PeerCount, node.KnownAddressCount)
+			node.SetBlockConnectedCallback(server.NotifyBlockConnected)
 			node.SetTransactionCallbacks(server.HasTransaction, server.TransactionByHash, server.AcceptTransaction)
 		}
 	}
@@ -451,6 +453,23 @@ func seedPeers(params *chaincfg.Params) []string {
 		peers = append(peers, seed+":"+params.DefaultPort)
 	}
 	return peers
+}
+
+func peerSnapshots(node *p2p.Node) func() []rpcserver.PeerSnapshot {
+	return func() []rpcserver.PeerSnapshot {
+		peers := node.Peers()
+		out := make([]rpcserver.PeerSnapshot, 0, len(peers))
+		for _, peer := range peers {
+			out = append(out, rpcserver.PeerSnapshot{
+				Address:     peer.Address,
+				Inbound:     peer.Inbound,
+				BestHeight:  peer.BestHeight,
+				UserAgent:   peer.UserAgent,
+				ConnectedAt: peer.ConnectedAt,
+			})
+		}
+		return out
+	}
 }
 
 func formatPAC(atoms int64) string {

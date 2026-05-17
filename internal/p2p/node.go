@@ -30,19 +30,20 @@ const (
 )
 
 type Config struct {
-	Params     *chaincfg.Params
-	ListenAddr string
-	Connect    []string
-	MaxPeers   int
-	BestHeight func() uint32
-	Chain      *blockchain.Chain
-	Store      *blockstore.Store
-	ChainMu    *sync.Mutex
-	HasTx      func(wire.Hash) bool
-	TxByHash   func(wire.Hash) (*wire.MsgTx, bool)
-	AcceptTx   func(*wire.MsgTx) (bool, error)
-	UserAgent  string
-	Logger     *log.Logger
+	Params           *chaincfg.Params
+	ListenAddr       string
+	Connect          []string
+	MaxPeers         int
+	BestHeight       func() uint32
+	Chain            *blockchain.Chain
+	Store            *blockstore.Store
+	ChainMu          *sync.Mutex
+	HasTx            func(wire.Hash) bool
+	TxByHash         func(wire.Hash) (*wire.MsgTx, bool)
+	AcceptTx         func(*wire.MsgTx) (bool, error)
+	OnBlockConnected func(*wire.MsgBlock)
+	UserAgent        string
+	Logger           *log.Logger
 }
 
 type Node struct {
@@ -126,6 +127,10 @@ func (n *Node) SetTransactionCallbacks(hasTx func(wire.Hash) bool, txByHash func
 	n.cfg.AcceptTx = acceptTx
 }
 
+func (n *Node) SetBlockConnectedCallback(fn func(*wire.MsgBlock)) {
+	n.cfg.OnBlockConnected = fn
+}
+
 func (n *Node) Peers() []PeerInfo {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -134,6 +139,12 @@ func (n *Node) Peers() []PeerInfo {
 		peers = append(peers, peer.info)
 	}
 	return peers
+}
+
+func (n *Node) KnownAddressCount() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.knownAddrs)
 }
 
 func (n *Node) Start(ctx context.Context) error {
@@ -553,6 +564,9 @@ func (n *Node) handleBlock(addr string, payload []byte) error {
 	if connected {
 		n.logf("p2p connected block height=%d hash=%s", block.Header.Height, block.MustBlockHash())
 		for _, connectedBlock := range connectedBlocks {
+			if n.cfg.OnBlockConnected != nil {
+				n.cfg.OnBlockConnected(connectedBlock)
+			}
 			n.broadcastInventory(connectedBlock.MustBlockHash(), addr)
 		}
 	}

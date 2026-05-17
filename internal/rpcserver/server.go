@@ -32,6 +32,17 @@ type Server struct {
 	mempool          []*wire.MsgTx
 	onBlockConnected func(*wire.MsgBlock)
 	onTxAccepted     func(*wire.MsgTx)
+	peerInfo         func() []PeerSnapshot
+	peerCount        func() int
+	knownAddrCount   func() int
+}
+
+type PeerSnapshot struct {
+	Address     string    `json:"address"`
+	Inbound     bool      `json:"inbound"`
+	BestHeight  uint32    `json:"best_height"`
+	UserAgent   string    `json:"user_agent"`
+	ConnectedAt time.Time `json:"connected_at"`
 }
 
 func New(chain *blockchain.Chain, store *blockstore.Store) *Server {
@@ -56,6 +67,8 @@ func NewWithLock(chain *blockchain.Chain, store *blockstore.Store, mu *sync.Mute
 	server.mux.HandleFunc("/getrawtransaction/", server.handleGetRawTransaction)
 	server.mux.HandleFunc("/getaddressutxos/", server.handleGetAddressUTXOs)
 	server.mux.HandleFunc("/getmininginfo", server.handleGetMiningInfo)
+	server.mux.HandleFunc("/getnetworkinfo", server.handleGetNetworkInfo)
+	server.mux.HandleFunc("/getpeerinfo", server.handleGetPeerInfo)
 	server.mux.HandleFunc("/getrawmempool", server.handleGetRawMempool)
 	server.mux.HandleFunc("/submitrawtransaction", server.handleSubmitRawTransaction)
 	server.mux.HandleFunc("/generate", server.handleGenerate)
@@ -72,6 +85,12 @@ func (s *Server) SetBlockConnectedCallback(fn func(*wire.MsgBlock)) {
 
 func (s *Server) SetTransactionAcceptedCallback(fn func(*wire.MsgTx)) {
 	s.onTxAccepted = fn
+}
+
+func (s *Server) SetPeerCallbacks(peerInfo func() []PeerSnapshot, peerCount func() int, knownAddrCount func() int) {
+	s.peerInfo = peerInfo
+	s.peerCount = peerCount
+	s.knownAddrCount = knownAddrCount
 }
 
 func (s *Server) AcceptTransaction(tx *wire.MsgTx) (bool, error) {
@@ -121,6 +140,15 @@ func (s *Server) TransactionByHash(hash wire.Hash) (*wire.MsgTx, bool) {
 	return nil, false
 }
 
+func (s *Server) NotifyBlockConnected(block *wire.MsgBlock) {
+	if block == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneMempoolLocked(block)
+}
+
 func (s *Server) ListenAndServe(ctx context.Context, listen string) error {
 	httpServer := &http.Server{
 		Addr:              listen,
@@ -166,6 +194,8 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 			"/getrawtransaction/{txid}",
 			"/getaddressutxos/{address}",
 			"/getmininginfo",
+			"/getnetworkinfo",
+			"/getpeerinfo",
 			"/getrawmempool",
 			"/submitrawtransaction",
 			"/generate",
@@ -304,6 +334,52 @@ func (s *Server) handleGetMiningInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleGetNetworkInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	s.mu.Lock()
+	params := s.chain.Params()
+	height := s.chain.Height()
+	bestHash := s.chain.Tip().MustBlockHash().String()
+	mempoolSize := len(s.mempool)
+	s.mu.Unlock()
+
+	peerCount := 0
+	if s.peerCount != nil {
+		peerCount = s.peerCount()
+	}
+	knownAddrs := 0
+	if s.knownAddrCount != nil {
+		knownAddrs = s.knownAddrCount()
+	}
+	writeJSON(w, map[string]any{
+		"network":          params.Name,
+		"bestheight":       height,
+		"bestblockhash":    bestHash,
+		"mempoolsize":      mempoolSize,
+		"peercount":        peerCount,
+		"knownaddrcount":   knownAddrs,
+		"targetspacingsec": int64(params.TargetTimePerBlock / time.Second),
+	})
+}
+
+func (s *Server) handleGetPeerInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	peers := []PeerSnapshot(nil)
+	if s.peerInfo != nil {
+		peers = s.peerInfo()
+	}
+	writeJSON(w, map[string]any{
+		"count": peersCount(peers),
+		"peers": peers,
+	})
+}
+
 func (s *Server) handleGetRawMempool(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -412,6 +488,7 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		s.pruneMempoolLocked(block)
 		hashes = append(hashes, block.MustBlockHash().String())
 		if s.onBlockConnected != nil {
 			s.onBlockConnected(block)
@@ -670,6 +747,31 @@ func transactionResults(params *chaincfg.Params, txs []*wire.MsgTx) []transactio
 		results = append(results, transactionSummary(params, tx))
 	}
 	return results
+}
+
+func (s *Server) pruneMempoolLocked(block *wire.MsgBlock) {
+	if len(s.mempool) == 0 || block == nil {
+		return
+	}
+	included := make(map[wire.Hash]struct{}, len(block.Transactions))
+	for _, tx := range block.Transactions {
+		included[tx.MustTxHash()] = struct{}{}
+	}
+	filtered := make([]*wire.MsgTx, 0, len(s.mempool))
+	for _, tx := range s.mempool {
+		if _, ok := included[tx.MustTxHash()]; ok {
+			continue
+		}
+		candidate := append(filtered, tx)
+		if _, err := s.chain.CalcFees(candidate); err == nil {
+			filtered = candidate
+		}
+	}
+	s.mempool = filtered
+}
+
+func peersCount(peers []PeerSnapshot) int {
+	return len(peers)
 }
 
 func transactionSummary(params *chaincfg.Params, tx *wire.MsgTx) transactionResult {

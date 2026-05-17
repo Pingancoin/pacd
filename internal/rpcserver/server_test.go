@@ -220,6 +220,47 @@ func TestSubmitRawTransactionAndGenerate(t *testing.T) {
 	}
 }
 
+func TestNetworkInfoAndPeerInfo(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	chain := blockchain.New(params)
+	server := rpcserver.New(chain, blockstore.New(t.TempDir()))
+	server.SetPeerCallbacks(
+		func() []rpcserver.PeerSnapshot {
+			return []rpcserver.PeerSnapshot{{
+				Address:    "127.0.0.1:39508",
+				Inbound:    false,
+				BestHeight: 12,
+				UserAgent:  "/pacd:test/",
+			}}
+		},
+		func() int { return 1 },
+		func() int { return 5 },
+	)
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	var networkInfo struct {
+		Network        string `json:"network"`
+		BestHeight     uint32 `json:"bestheight"`
+		PeerCount      int    `json:"peercount"`
+		KnownAddrCount int    `json:"knownaddrcount"`
+		MempoolSize    int    `json:"mempoolsize"`
+	}
+	getJSON(t, httpServer.URL+"/getnetworkinfo", &networkInfo)
+	if networkInfo.Network != params.Name || networkInfo.BestHeight != 0 || networkInfo.PeerCount != 1 || networkInfo.KnownAddrCount != 5 || networkInfo.MempoolSize != 0 {
+		t.Fatalf("unexpected network info: %+v", networkInfo)
+	}
+
+	var peerInfo struct {
+		Count int                      `json:"count"`
+		Peers []rpcserver.PeerSnapshot `json:"peers"`
+	}
+	getJSON(t, httpServer.URL+"/getpeerinfo", &peerInfo)
+	if peerInfo.Count != 1 || len(peerInfo.Peers) != 1 || peerInfo.Peers[0].Address != "127.0.0.1:39508" || peerInfo.Peers[0].BestHeight != 12 {
+		t.Fatalf("unexpected peer info: %+v", peerInfo)
+	}
+}
+
 func getJSON(t *testing.T, url string, dest any) {
 	t.Helper()
 	resp, err := http.Get(url)

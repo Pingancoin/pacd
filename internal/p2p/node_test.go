@@ -2,6 +2,7 @@ package p2p_test
 
 import (
 	"context"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ import (
 	"github.com/Pingancoin/pacd/internal/p2p"
 	"github.com/Pingancoin/pacd/internal/rpcserver"
 	"github.com/Pingancoin/pacd/internal/wallet"
-	"net/http/httptest"
+	"github.com/Pingancoin/pacd/internal/wire"
 )
 
 func TestNodesHandshake(t *testing.T) {
@@ -294,6 +295,7 @@ func TestTransactionRelayFetchesNewTx(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	client.SetBlockConnectedCallback(clientRPC.NotifyBlockConnected)
 	if err := client.DialOnce(ctx, server.ListenAddr()); err != nil {
 		t.Fatal(err)
 	}
@@ -329,6 +331,22 @@ func TestTransactionRelayFetchesNewTx(t *testing.T) {
 	}
 	txHash := draft.Tx.MustTxHash()
 	waitForTx(t, func() bool {
+		return clientRPC.HasTransaction(txHash)
+	})
+
+	blockTime = blockTime.Add(params.TargetTimePerBlock)
+	block, err := mining.MineBlockWithTransactions(serverChain, minerScript, blockTime, []*wire.MsgTx{draft.Tx}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := serverChain.AddBlock(block); err != nil {
+		t.Fatal(err)
+	}
+	serverRPC.NotifyBlockConnected(block)
+	server.RelayBlock(block)
+
+	waitForHeight(t, clientChain, 3)
+	waitForTxAbsent(t, func() bool {
 		return clientRPC.HasTransaction(txHash)
 	})
 }
@@ -379,4 +397,16 @@ func waitForTx(t *testing.T, ok func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("transaction was not relayed")
+}
+
+func waitForTxAbsent(t *testing.T, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if !ok() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("transaction was not pruned")
 }
