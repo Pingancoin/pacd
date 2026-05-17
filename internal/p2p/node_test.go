@@ -433,6 +433,7 @@ func TestAddressDiscoveryConnectsAdditionalPeer(t *testing.T) {
 	waitForListenAddr(t, peerC)
 	waitForPeers(t, seed, 2)
 	waitForPeerAddress(t, peerC, peerB.ListenAddr())
+	waitForAddrSource(t, peerC, peerB.ListenAddr(), "verified")
 }
 
 func TestAddrBookPersistsDiscoveredAddress(t *testing.T) {
@@ -489,6 +490,7 @@ func TestAddrBookPersistsDiscoveredAddress(t *testing.T) {
 	})
 	waitForListenAddr(t, peer)
 	waitForKnownAddrs(t, seed, 2)
+	waitForAddrSource(t, seed, peer.ListenAddr(), "discovered")
 	waitForAddrBookEntry(t, addrBookPath, peer.ListenAddr())
 }
 
@@ -553,6 +555,7 @@ func TestAddrBookBootstrapsDiscovery(t *testing.T) {
 	})
 	waitForListenAddr(t, node)
 	waitForPeerAddress(t, node, peerB.ListenAddr())
+	waitForAddrSource(t, node, peerB.ListenAddr(), "verified")
 }
 
 func waitForListenAddr(t *testing.T, node *p2p.Node) {
@@ -647,11 +650,22 @@ func waitForAddrBookEntry(t *testing.T, path string, want string) {
 	for time.Now().Before(deadline) {
 		data, err := os.ReadFile(path)
 		if err == nil {
-			var addrs []string
+			var addrs []struct {
+				Address string `json:"address"`
+			}
 			if err := json.Unmarshal(data, &addrs); err == nil {
 				for _, addr := range addrs {
-					if addr == want {
+					if addr.Address == want {
 						return
+					}
+				}
+			} else {
+				var legacy []string
+				if err := json.Unmarshal(data, &legacy); err == nil {
+					for _, addr := range legacy {
+						if addr == want {
+							return
+						}
 					}
 				}
 			}
@@ -659,4 +673,18 @@ func waitForAddrBookEntry(t *testing.T, path string, want string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("addrbook %s did not contain %s", path, want)
+}
+
+func waitForAddrSource(t *testing.T, node *p2p.Node, wantAddr string, wantSource string) {
+	t.Helper()
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, entry := range node.AddrBook() {
+			if entry.Address == wantAddr && entry.Source == wantSource {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("addr %s did not reach source %s; addrbook=%+v", wantAddr, wantSource, node.AddrBook())
 }

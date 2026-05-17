@@ -388,15 +388,17 @@ func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bo
 		if listen == "" {
 			listen = "127.0.0.1:" + chain.Params().DefaultPort
 		}
-		peers := append([]string(nil), connectPeers...)
-		if len(peers) == 0 {
-			peers = seedPeers(chain.Params())
+		manualPeers := append([]string(nil), connectPeers...)
+		seedPeersList := []string(nil)
+		if len(manualPeers) == 0 {
+			seedPeersList = seedPeers(chain.Params())
 		}
 		var err error
 		node, err = p2p.NewNode(p2p.Config{
 			Params:       chain.Params(),
 			ListenAddr:   listen,
-			Connect:      peers,
+			Connect:      manualPeers,
+			SeedAddrs:    seedPeersList,
 			MaxPeers:     maxPeers,
 			Chain:        chain,
 			Store:        store,
@@ -408,8 +410,10 @@ func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bo
 			exit(err)
 		}
 		fmt.Printf("p2p listening on %s\n", listen)
-		if len(peers) > 0 {
-			fmt.Printf("p2p connecting to %s\n", strings.Join(peers, ","))
+		if len(manualPeers) > 0 {
+			fmt.Printf("p2p connecting to %s\n", strings.Join(manualPeers, ","))
+		} else if len(seedPeersList) > 0 {
+			fmt.Printf("p2p seeding from %s\n", strings.Join(seedPeersList, ","))
 		}
 	}
 	if rpcEnabled {

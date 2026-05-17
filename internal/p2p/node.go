@@ -36,10 +36,21 @@ const (
 	banScoreInvalidChain     = 50
 )
 
+type addrSource string
+
+const (
+	addrSourceDiscovered addrSource = "discovered"
+	addrSourceVerified   addrSource = "verified"
+	addrSourceSeed       addrSource = "seed"
+	addrSourceManual     addrSource = "manual"
+	addrSourceListen     addrSource = "listen"
+)
+
 type Config struct {
 	Params           *chaincfg.Params
 	ListenAddr       string
 	Connect          []string
+	SeedAddrs        []string
 	MaxPeers         int
 	BestHeight       func() uint32
 	Chain            *blockchain.Chain
@@ -61,9 +72,8 @@ type Node struct {
 
 	mu            sync.Mutex
 	peers         map[string]*peerState
-	knownAddrs    map[string]struct{}
+	addrBook      map[string]*addrBookEntry
 	recentDials   map[string]time.Time
-	dialFailures  map[string]int
 	orphans       map[wire.Hash]*wire.MsgBlock
 	orphansByPrev map[wire.Hash][]wire.Hash
 	banScores     map[string]int
@@ -77,10 +87,24 @@ type PeerInfo struct {
 	ConnectedAt time.Time
 }
 
+type AddrInfo struct {
+	Address     string
+	Source      string
+	LastSuccess int64
+	Failures    int
+}
+
 type peerState struct {
 	info    PeerInfo
 	conn    net.Conn
 	writeMu sync.Mutex
+}
+
+type addrBookEntry struct {
+	Address     string     `json:"address"`
+	Source      addrSource `json:"source"`
+	LastSuccess int64      `json:"last_success,omitempty"`
+	Failures    int        `json:"failures,omitempty"`
 }
 
 func NewNode(cfg Config) (*Node, error) {
@@ -104,9 +128,8 @@ func NewNode(cfg Config) (*Node, error) {
 		cfg:           cfg,
 		nonce:         nonce,
 		peers:         make(map[string]*peerState),
-		knownAddrs:    make(map[string]struct{}),
+		addrBook:      make(map[string]*addrBookEntry),
 		recentDials:   make(map[string]time.Time),
-		dialFailures:  make(map[string]int),
 		orphans:       make(map[wire.Hash]*wire.MsgBlock),
 		orphansByPrev: make(map[wire.Hash][]wire.Hash),
 		banScores:     make(map[string]int),
@@ -114,9 +137,12 @@ func NewNode(cfg Config) (*Node, error) {
 	if err := node.loadAddrBook(); err != nil {
 		return nil, err
 	}
-	node.rememberAddr(cfg.ListenAddr)
+	node.learnAddr(cfg.ListenAddr, addrSourceListen)
 	for _, addr := range cfg.Connect {
-		node.rememberAddr(addr)
+		node.learnAddr(addr, addrSourceManual)
+	}
+	for _, addr := range cfg.SeedAddrs {
+		node.learnAddr(addr, addrSourceSeed)
 	}
 	return node, nil
 }
@@ -159,7 +185,31 @@ func (n *Node) Peers() []PeerInfo {
 func (n *Node) KnownAddressCount() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return len(n.knownAddrs)
+	return len(n.addrBook)
+}
+
+func (n *Node) AddrBook() []AddrInfo {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	addrs := make([]AddrInfo, 0, len(n.addrBook))
+	for _, entry := range n.addrBook {
+		addrs = append(addrs, AddrInfo{
+			Address:     entry.Address,
+			Source:      string(entry.Source),
+			LastSuccess: entry.LastSuccess,
+			Failures:    entry.Failures,
+		})
+	}
+	slices.SortStableFunc(addrs, func(a, b AddrInfo) int {
+		if a.Address < b.Address {
+			return -1
+		}
+		if a.Address > b.Address {
+			return 1
+		}
+		return 0
+	})
+	return addrs
 }
 
 func (n *Node) Start(ctx context.Context) error {
@@ -171,7 +221,7 @@ func (n *Node) Start(ctx context.Context) error {
 		n.mu.Lock()
 		n.listener = listener
 		n.mu.Unlock()
-		n.rememberAddr(listener.Addr().String())
+		n.learnAddr(listener.Addr().String(), addrSourceListen)
 		go n.acceptLoop(ctx, listener)
 	}
 
@@ -266,7 +316,7 @@ func (n *Node) handleConn(ctx context.Context, conn net.Conn, inbound bool) {
 		ConnectedAt: time.Now().UTC(),
 	}, conn)
 	if !inbound {
-		n.rememberAddr(addr)
+		n.learnAddr(addr, addrSourceVerified)
 		n.recordDiscoveryResult(addr, true)
 	}
 	n.logf("p2p connected %s inbound=%t height=%d agent=%s", addr, inbound, remoteVersion.BestHeight, remoteVersion.UserAgent)
@@ -572,7 +622,7 @@ func (n *Node) handleAddr(payload []byte) error {
 		return err
 	}
 	for _, addr := range list.Addrs {
-		n.rememberAddr(addr)
+		n.learnAddr(addr, addrSourceDiscovered)
 	}
 	return nil
 }
@@ -853,26 +903,85 @@ func (n *Node) sendAddr(addr string) error {
 func (n *Node) knownAddresses() []string {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	addrs := make([]string, 0, len(n.knownAddrs))
-	for addr := range n.knownAddrs {
+	addrs := make([]string, 0, len(n.addrBook))
+	for addr := range n.addrBook {
 		addrs = append(addrs, addr)
 	}
 	return addrs
 }
 
 func (n *Node) rememberAddr(addr string) {
+	n.learnAddr(addr, addrSourceDiscovered)
+}
+
+func (n *Node) learnAddr(addr string, source addrSource) {
 	addr = normalizeAddr(addr)
 	if addr == "" {
 		return
 	}
 	n.mu.Lock()
-	if _, ok := n.knownAddrs[addr]; ok {
+	updated := false
+	entry, ok := n.addrBook[addr]
+	if !ok {
+		n.addrBook[addr] = &addrBookEntry{Address: addr, Source: source}
+		updated = true
+	} else if betterAddrSource(source, entry.Source) {
+		entry.Source = source
+		updated = true
+	}
+	n.mu.Unlock()
+	if updated {
+		n.persistAddrBook()
+	}
+}
+
+func betterAddrSource(next, current addrSource) bool {
+	return addrSourceRank(next) > addrSourceRank(current)
+}
+
+func addrSourceRank(source addrSource) int {
+	switch source {
+	case addrSourceVerified:
+		return 4
+	case addrSourceManual:
+		return 3
+	case addrSourceSeed:
+		return 2
+	case addrSourceDiscovered:
+		return 1
+	case addrSourceListen:
+		return 0
+	default:
+		return 0
+	}
+}
+
+func (n *Node) addrBookInfo(addr string) (addrBookEntry, bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	entry, ok := n.addrBook[normalizeAddr(addr)]
+	if !ok {
+		return addrBookEntry{}, false
+	}
+	return *entry, true
+}
+
+func (n *Node) updateAddrBookEntry(addr string, fn func(*addrBookEntry) bool) {
+	addr = normalizeAddr(addr)
+	if addr == "" {
+		return
+	}
+	n.mu.Lock()
+	entry, ok := n.addrBook[addr]
+	if !ok {
 		n.mu.Unlock()
 		return
 	}
-	n.knownAddrs[addr] = struct{}{}
+	updated := fn(entry)
 	n.mu.Unlock()
-	n.persistAddrBook()
+	if updated {
+		n.persistAddrBook()
+	}
 }
 
 func (n *Node) discoveryLoop(ctx context.Context) {
@@ -912,8 +1021,8 @@ func (n *Node) discoveryCandidates() []string {
 	if n.listener != nil {
 		self = normalizeAddr(n.listener.Addr().String())
 	}
-	candidates := make([]string, 0, len(n.knownAddrs))
-	for addr := range n.knownAddrs {
+	candidates := make([]string, 0, len(n.addrBook))
+	for addr, entry := range n.addrBook {
 		if addr == "" || addr == self {
 			continue
 		}
@@ -926,12 +1035,35 @@ func (n *Node) discoveryCandidates() []string {
 		if n.banScores[addr] >= banThreshold {
 			continue
 		}
-		if last, ok := n.recentDials[addr]; ok && now.Sub(last) < n.discoveryRetryDelay(addr) {
+		if last, ok := n.recentDials[addr]; ok && now.Sub(last) < n.discoveryRetryDelay(entry.Failures) {
 			continue
 		}
 		n.recentDials[addr] = now
 		candidates = append(candidates, addr)
 	}
+	slices.SortStableFunc(candidates, func(a, b string) int {
+		left := n.addrBook[a]
+		right := n.addrBook[b]
+		if cmp := addrSourceRank(right.Source) - addrSourceRank(left.Source); cmp != 0 {
+			return cmp
+		}
+		if left.LastSuccess != right.LastSuccess {
+			if left.LastSuccess > right.LastSuccess {
+				return -1
+			}
+			return 1
+		}
+		if left.Failures != right.Failures {
+			return left.Failures - right.Failures
+		}
+		if a < b {
+			return -1
+		}
+		if a > b {
+			return 1
+		}
+		return 0
+	})
 	return candidates
 }
 
@@ -949,17 +1081,21 @@ func (n *Node) recordDiscoveryResult(addr string, success bool) {
 	if addr == "" {
 		return
 	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if success {
-		delete(n.dialFailures, addr)
-		return
-	}
-	n.dialFailures[addr]++
+	n.updateAddrBookEntry(addr, func(entry *addrBookEntry) bool {
+		now := time.Now().UTC().Unix()
+		if success {
+			updated := entry.Source != addrSourceVerified || entry.LastSuccess != now || entry.Failures != 0
+			entry.Source = addrSourceVerified
+			entry.LastSuccess = now
+			entry.Failures = 0
+			return updated
+		}
+		entry.Failures++
+		return true
+	})
 }
 
-func (n *Node) discoveryRetryDelay(addr string) time.Duration {
-	failures := n.dialFailures[addr]
+func (n *Node) discoveryRetryDelay(failures int) time.Duration {
 	if failures <= 0 {
 		return defaultDiscoveryRetry
 	}
@@ -984,16 +1120,32 @@ func (n *Node) loadAddrBook() error {
 	if err != nil {
 		return err
 	}
-	var addrs []string
+	var addrs []addrBookEntry
 	if err := json.Unmarshal(data, &addrs); err != nil {
-		return fmt.Errorf("decode addrbook %s: %w", n.cfg.AddrBookPath, err)
+		var legacy []string
+		if err := json.Unmarshal(data, &legacy); err != nil {
+			return fmt.Errorf("decode addrbook %s: %w", n.cfg.AddrBookPath, err)
+		}
+		for _, addr := range legacy {
+			addr = normalizeAddr(addr)
+			if addr == "" {
+				continue
+			}
+			n.addrBook[addr] = &addrBookEntry{Address: addr, Source: addrSourceDiscovered}
+		}
+		return nil
 	}
-	for _, addr := range addrs {
-		addr = normalizeAddr(addr)
+	for _, entry := range addrs {
+		addr := normalizeAddr(entry.Address)
 		if addr == "" {
 			continue
 		}
-		n.knownAddrs[addr] = struct{}{}
+		entry.Address = addr
+		if entry.Source == "" {
+			entry.Source = addrSourceDiscovered
+		}
+		copied := entry
+		n.addrBook[addr] = &copied
 	}
 	return nil
 }
@@ -1022,14 +1174,22 @@ func (n *Node) persistAddrBook() {
 	}
 }
 
-func (n *Node) addrBookEntries() []string {
+func (n *Node) addrBookEntries() []addrBookEntry {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	addrs := make([]string, 0, len(n.knownAddrs))
-	for addr := range n.knownAddrs {
-		addrs = append(addrs, addr)
+	addrs := make([]addrBookEntry, 0, len(n.addrBook))
+	for _, entry := range n.addrBook {
+		addrs = append(addrs, *entry)
 	}
-	slices.Sort(addrs)
+	slices.SortStableFunc(addrs, func(a, b addrBookEntry) int {
+		if a.Address < b.Address {
+			return -1
+		}
+		if a.Address > b.Address {
+			return 1
+		}
+		return 0
+	})
 	return addrs
 }
 
