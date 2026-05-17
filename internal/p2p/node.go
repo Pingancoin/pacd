@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"sync"
@@ -22,6 +23,10 @@ const (
 	defaultHandshakeTimeout = 10 * time.Second
 	defaultIdleTimeout      = 2 * time.Minute
 	defaultMaxPeers         = 32
+	defaultMaxOrphans       = 128
+	banThreshold            = 100
+	banScoreMalformed       = 100
+	banScoreInvalidChain    = 50
 )
 
 type Config struct {
@@ -42,8 +47,12 @@ type Node struct {
 	nonce    uint64
 	listener net.Listener
 
-	mu    sync.Mutex
-	peers map[string]PeerInfo
+	mu            sync.Mutex
+	peers         map[string]*peerState
+	knownAddrs    map[string]struct{}
+	orphans       map[wire.Hash]*wire.MsgBlock
+	orphansByPrev map[wire.Hash][]wire.Hash
+	banScores     map[string]int
 }
 
 type PeerInfo struct {
@@ -52,6 +61,12 @@ type PeerInfo struct {
 	BestHeight  uint32
 	UserAgent   string
 	ConnectedAt time.Time
+}
+
+type peerState struct {
+	info    PeerInfo
+	conn    net.Conn
+	writeMu sync.Mutex
 }
 
 func NewNode(cfg Config) (*Node, error) {
@@ -71,11 +86,22 @@ func NewNode(cfg Config) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Node{
-		cfg:   cfg,
-		nonce: nonce,
-		peers: make(map[string]PeerInfo),
-	}, nil
+	node := &Node{
+		cfg:           cfg,
+		nonce:         nonce,
+		peers:         make(map[string]*peerState),
+		knownAddrs:    make(map[string]struct{}),
+		orphans:       make(map[wire.Hash]*wire.MsgBlock),
+		orphansByPrev: make(map[wire.Hash][]wire.Hash),
+		banScores:     make(map[string]int),
+	}
+	if cfg.ListenAddr != "" {
+		node.knownAddrs[cfg.ListenAddr] = struct{}{}
+	}
+	for _, addr := range cfg.Connect {
+		node.knownAddrs[addr] = struct{}{}
+	}
+	return node, nil
 }
 
 func (n *Node) ListenAddr() string {
@@ -96,7 +122,7 @@ func (n *Node) Peers() []PeerInfo {
 	defer n.mu.Unlock()
 	peers := make([]PeerInfo, 0, len(n.peers))
 	for _, peer := range n.peers {
-		peers = append(peers, peer)
+		peers = append(peers, peer.info)
 	}
 	return peers
 }
@@ -196,13 +222,18 @@ func (n *Node) handleConn(ctx context.Context, conn net.Conn, inbound bool) {
 		BestHeight:  remoteVersion.BestHeight,
 		UserAgent:   remoteVersion.UserAgent,
 		ConnectedAt: time.Now().UTC(),
-	})
+	}, conn)
+	n.rememberAddr(addr)
 	n.logf("p2p connected %s inbound=%t height=%d agent=%s", addr, inbound, remoteVersion.BestHeight, remoteVersion.UserAgent)
 	if remoteVersion.BestHeight > n.bestHeight() {
-		if err := n.sendGetHeaders(conn); err != nil {
+		if err := n.sendGetHeaders(addr); err != nil {
 			n.logf("p2p getheaders %s failed: %v", addr, err)
 			return
 		}
+	}
+	if err := n.sendAddr(addr); err != nil {
+		n.logf("p2p addr %s failed: %v", addr, err)
+		return
 	}
 	n.readLoop(ctx, conn, addr)
 }
@@ -298,29 +329,57 @@ func (n *Node) readLoop(ctx context.Context, conn net.Conn, addr string) {
 		}
 		msg, err := ReadMessage(conn, n.cfg.Params.NetworkMagic)
 		if err != nil {
+			if shouldBanReadError(err) {
+				n.addBanScore(addr, banScoreMalformed, "read failure")
+			}
 			return
 		}
 		switch msg.Command {
 		case CommandPing:
-			_ = WriteMessage(conn, n.cfg.Params.NetworkMagic, Message{Command: CommandPong, Payload: msg.Payload})
+			_ = n.writePeerMessage(addr, Message{Command: CommandPong, Payload: msg.Payload})
 		case CommandPong:
 		case CommandGetHeaders:
-			if err := n.handleGetHeaders(conn, msg.Payload); err != nil {
+			if err := n.handleGetHeaders(addr, msg.Payload); err != nil {
+				n.addBanScore(addr, banScoreMalformed, "getheaders")
 				n.logf("p2p getheaders from %s failed: %v", addr, err)
 				return
 			}
 		case CommandHeaders:
-			if err := n.handleHeaders(conn, msg.Payload); err != nil {
+			if err := n.handleHeaders(addr, msg.Payload); err != nil {
+				n.addBanScore(addr, banScoreInvalidChain, "headers")
 				n.logf("p2p headers from %s failed: %v", addr, err)
 				return
 			}
 		case CommandGetBlocks:
-			if err := n.handleGetBlocks(conn, msg.Payload); err != nil {
+			if err := n.handleGetBlocks(addr, msg.Payload); err != nil {
 				n.logf("p2p getblocks from %s failed: %v", addr, err)
 				return
 			}
+		case CommandInv:
+			if err := n.handleInv(addr, msg.Payload); err != nil {
+				n.addBanScore(addr, banScoreMalformed, "inv")
+				n.logf("p2p inv from %s failed: %v", addr, err)
+				return
+			}
+		case CommandGetData:
+			if err := n.handleGetData(addr, msg.Payload); err != nil {
+				n.logf("p2p getdata from %s failed: %v", addr, err)
+				return
+			}
+		case CommandGetAddr:
+			if err := n.sendAddr(addr); err != nil {
+				n.logf("p2p getaddr from %s failed: %v", addr, err)
+				return
+			}
+		case CommandAddr:
+			if err := n.handleAddr(msg.Payload); err != nil {
+				n.addBanScore(addr, banScoreMalformed, "addr")
+				n.logf("p2p addr from %s failed: %v", addr, err)
+				return
+			}
 		case CommandBlock:
-			if err := n.handleBlock(conn, addr, msg.Payload); err != nil {
+			if err := n.handleBlock(addr, msg.Payload); err != nil {
+				n.addBanScore(addr, banScoreInvalidChain, "block")
 				n.logf("p2p block from %s failed: %v", addr, err)
 				return
 			}
@@ -333,7 +392,7 @@ func (n *Node) readLoop(ctx context.Context, conn net.Conn, addr string) {
 	}
 }
 
-func (n *Node) handleGetHeaders(conn net.Conn, payload []byte) error {
+func (n *Node) handleGetHeaders(addr string, payload []byte) error {
 	req, err := DeserializeGetHeaders(payload)
 	if err != nil {
 		return err
@@ -343,10 +402,10 @@ func (n *Node) handleGetHeaders(conn net.Conn, payload []byte) error {
 	if err != nil {
 		return err
 	}
-	return WriteMessage(conn, n.cfg.Params.NetworkMagic, Message{Command: CommandHeaders, Payload: serialized})
+	return n.writePeerMessage(addr, Message{Command: CommandHeaders, Payload: serialized})
 }
 
-func (n *Node) handleHeaders(conn net.Conn, payload []byte) error {
+func (n *Node) handleHeaders(addr string, payload []byte) error {
 	headers, err := DeserializeHeaders(payload)
 	if err != nil {
 		return err
@@ -365,10 +424,10 @@ func (n *Node) handleHeaders(conn net.Conn, payload []byte) error {
 	if err != nil {
 		return err
 	}
-	return WriteMessage(conn, n.cfg.Params.NetworkMagic, Message{Command: CommandGetBlocks, Payload: serialized})
+	return n.writePeerMessage(addr, Message{Command: CommandGetBlocks, Payload: serialized})
 }
 
-func (n *Node) handleGetBlocks(conn net.Conn, payload []byte) error {
+func (n *Node) handleGetBlocks(addr string, payload []byte) error {
 	req, err := DeserializeGetBlocks(payload)
 	if err != nil {
 		return err
@@ -382,37 +441,100 @@ func (n *Node) handleGetBlocks(conn net.Conn, payload []byte) error {
 		if err != nil {
 			return err
 		}
-		if err := WriteMessage(conn, n.cfg.Params.NetworkMagic, Message{Command: CommandBlock, Payload: serialized}); err != nil {
+		if err := n.writePeerMessage(addr, Message{Command: CommandBlock, Payload: serialized}); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (n *Node) handleBlock(conn net.Conn, addr string, payload []byte) error {
+func (n *Node) handleInv(addr string, payload []byte) error {
+	inv, err := DeserializeInventory(payload)
+	if err != nil {
+		return err
+	}
+	requests := make([]InvVector, 0, len(inv.Items))
+	for _, item := range inv.Items {
+		if item.Type != InvTypeBlock {
+			continue
+		}
+		if n.hasBlock(item.Hash) {
+			continue
+		}
+		requests = append(requests, item)
+	}
+	if len(requests) == 0 {
+		return nil
+	}
+	serialized, err := (Inventory{Items: requests}).Serialize()
+	if err != nil {
+		return err
+	}
+	return n.writePeerMessage(addr, Message{Command: CommandGetData, Payload: serialized})
+}
+
+func (n *Node) handleGetData(addr string, payload []byte) error {
+	req, err := DeserializeInventory(payload)
+	if err != nil {
+		return err
+	}
+	for _, item := range req.Items {
+		if item.Type != InvTypeBlock {
+			continue
+		}
+		block, ok := n.blockByHash(item.Hash)
+		if !ok {
+			continue
+		}
+		serialized, err := block.Serialize()
+		if err != nil {
+			return err
+		}
+		if err := n.writePeerMessage(addr, Message{Command: CommandBlock, Payload: serialized}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (n *Node) handleAddr(payload []byte) error {
+	list, err := DeserializeAddrList(payload)
+	if err != nil {
+		return err
+	}
+	for _, addr := range list.Addrs {
+		n.rememberAddr(addr)
+	}
+	return nil
+}
+
+func (n *Node) handleBlock(addr string, payload []byte) error {
 	block, err := wire.DeserializeBlock(payload)
 	if err != nil {
 		return err
 	}
-	connected, err := n.connectBlock(block)
+	connected, connectedBlocks, err := n.connectBlock(block)
 	if err != nil {
 		return err
 	}
 	if connected {
 		n.logf("p2p connected block height=%d hash=%s", block.Header.Height, block.MustBlockHash())
+		for _, connectedBlock := range connectedBlocks {
+			n.broadcastInventory(connectedBlock.MustBlockHash(), addr)
+		}
 	}
 	if info, ok := n.peerInfo(addr); ok && info.BestHeight > n.bestHeight() {
-		return n.sendGetHeaders(conn)
+		return n.sendGetHeaders(addr)
 	}
 	return nil
 }
 
-func (n *Node) sendGetHeaders(conn net.Conn) error {
+func (n *Node) sendGetHeaders(addr string) error {
 	payload, err := (GetHeaders{StartHeight: n.bestHeight()}).Serialize()
 	if err != nil {
 		return err
 	}
-	return WriteMessage(conn, n.cfg.Params.NetworkMagic, Message{Command: CommandGetHeaders, Payload: payload})
+	return n.writePeerMessage(addr, Message{Command: CommandGetHeaders, Payload: payload})
 }
 
 func (n *Node) headersAfter(startHeight uint32) []wire.BlockHeader {
@@ -490,27 +612,34 @@ func (n *Node) blockByHash(hash wire.Hash) (*wire.MsgBlock, bool) {
 	return n.cfg.Chain.BlockByHash(hash)
 }
 
-func (n *Node) connectBlock(block *wire.MsgBlock) (bool, error) {
+func (n *Node) connectBlock(block *wire.MsgBlock) (bool, []*wire.MsgBlock, error) {
 	n.lockChain()
 	defer n.unlockChain()
 	if n.cfg.Chain == nil {
-		return false, nil
+		return false, nil, nil
 	}
 	if block.Header.Height <= n.cfg.Chain.Height() {
 		if existing, ok := n.cfg.Chain.BlockByHeight(block.Header.Height); ok && existing.MustBlockHash() == block.MustBlockHash() {
-			return false, nil
+			return false, nil, nil
 		}
-		return false, fmt.Errorf("stale or conflicting block at height %d", block.Header.Height)
+		return false, nil, fmt.Errorf("stale or conflicting block at height %d", block.Header.Height)
+	}
+	tip := n.cfg.Chain.Tip()
+	if block.Header.PrevBlock != tip.MustBlockHash() || block.Header.Height != n.cfg.Chain.Height()+1 {
+		n.addOrphanLocked(block)
+		return false, nil, nil
 	}
 	if err := n.cfg.Chain.AddBlock(block); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if n.cfg.Store != nil {
 		if err := n.cfg.Store.Append(block); err != nil {
-			return false, err
+			return false, nil, err
 		}
 	}
-	return true, nil
+	connected := []*wire.MsgBlock{block}
+	connected = append(connected, n.connectOrphansLocked(block.MustBlockHash())...)
+	return true, connected, nil
 }
 
 func (n *Node) bestHeight() uint32 {
@@ -543,14 +672,23 @@ func (n *Node) reservePeer(addr string) bool {
 	if _, ok := n.peers[addr]; ok {
 		return false
 	}
-	n.peers[addr] = PeerInfo{Address: addr}
+	if n.banScores[addr] >= banThreshold {
+		return false
+	}
+	n.peers[addr] = &peerState{info: PeerInfo{Address: addr}}
 	return true
 }
 
-func (n *Node) updatePeer(addr string, info PeerInfo) {
+func (n *Node) updatePeer(addr string, info PeerInfo, conn net.Conn) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.peers[addr] = info
+	peer, ok := n.peers[addr]
+	if !ok {
+		peer = &peerState{}
+		n.peers[addr] = peer
+	}
+	peer.info = info
+	peer.conn = conn
 }
 
 func (n *Node) removePeer(addr string) {
@@ -562,8 +700,162 @@ func (n *Node) removePeer(addr string) {
 func (n *Node) peerInfo(addr string) (PeerInfo, bool) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	info, ok := n.peers[addr]
-	return info, ok
+	peer, ok := n.peers[addr]
+	if !ok {
+		return PeerInfo{}, false
+	}
+	return peer.info, true
+}
+
+func (n *Node) writePeerMessage(addr string, msg Message) error {
+	n.mu.Lock()
+	peer, ok := n.peers[addr]
+	n.mu.Unlock()
+	if !ok || peer.conn == nil {
+		return fmt.Errorf("peer %s is not connected", addr)
+	}
+	peer.writeMu.Lock()
+	defer peer.writeMu.Unlock()
+	return WriteMessage(peer.conn, n.cfg.Params.NetworkMagic, msg)
+}
+
+func (n *Node) broadcastInventory(hash wire.Hash, exceptAddr string) {
+	serialized, err := (Inventory{Items: []InvVector{{Type: InvTypeBlock, Hash: hash}}}).Serialize()
+	if err != nil {
+		n.logf("p2p inventory serialize failed: %v", err)
+		return
+	}
+	n.mu.Lock()
+	peers := make([]*peerState, 0, len(n.peers))
+	for addr, peer := range n.peers {
+		if addr == exceptAddr || peer.conn == nil {
+			continue
+		}
+		peers = append(peers, peer)
+	}
+	n.mu.Unlock()
+	for _, peer := range peers {
+		peer.writeMu.Lock()
+		err := WriteMessage(peer.conn, n.cfg.Params.NetworkMagic, Message{Command: CommandInv, Payload: serialized})
+		peer.writeMu.Unlock()
+		if err != nil {
+			n.logf("p2p inventory relay failed: %v", err)
+		}
+	}
+}
+
+func (n *Node) sendAddr(addr string) error {
+	serialized, err := (AddrList{Addrs: n.knownAddresses()}).Serialize()
+	if err != nil {
+		return err
+	}
+	return n.writePeerMessage(addr, Message{Command: CommandAddr, Payload: serialized})
+}
+
+func (n *Node) knownAddresses() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	addrs := make([]string, 0, len(n.knownAddrs))
+	for addr := range n.knownAddrs {
+		addrs = append(addrs, addr)
+	}
+	return addrs
+}
+
+func (n *Node) rememberAddr(addr string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.knownAddrs[addr] = struct{}{}
+}
+
+func (n *Node) hasBlock(hash wire.Hash) bool {
+	n.lockChain()
+	defer n.unlockChain()
+	if n.cfg.Chain != nil {
+		if _, ok := n.cfg.Chain.BlockByHash(hash); ok {
+			return true
+		}
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	_, ok := n.orphans[hash]
+	return ok
+}
+
+func (n *Node) addOrphanLocked(block *wire.MsgBlock) {
+	hash := block.MustBlockHash()
+	if _, ok := n.orphans[hash]; ok {
+		return
+	}
+	if len(n.orphans) >= defaultMaxOrphans {
+		for orphanHash, orphan := range n.orphans {
+			delete(n.orphans, orphanHash)
+			prev := orphan.Header.PrevBlock
+			n.orphansByPrev[prev] = removeHash(n.orphansByPrev[prev], orphanHash)
+			if len(n.orphansByPrev[prev]) == 0 {
+				delete(n.orphansByPrev, prev)
+			}
+			break
+		}
+	}
+	n.orphans[hash] = block
+	prev := block.Header.PrevBlock
+	n.orphansByPrev[prev] = append(n.orphansByPrev[prev], hash)
+}
+
+func (n *Node) connectOrphansLocked(parentHash wire.Hash) []*wire.MsgBlock {
+	hashes := append([]wire.Hash(nil), n.orphansByPrev[parentHash]...)
+	delete(n.orphansByPrev, parentHash)
+	connected := make([]*wire.MsgBlock, 0, len(hashes))
+	for _, orphanHash := range hashes {
+		orphan, ok := n.orphans[orphanHash]
+		if !ok {
+			continue
+		}
+		delete(n.orphans, orphanHash)
+		if err := n.cfg.Chain.AddBlock(orphan); err != nil {
+			n.logf("p2p orphan connect failed %s: %v", orphanHash, err)
+			continue
+		}
+		if n.cfg.Store != nil {
+			if err := n.cfg.Store.Append(orphan); err != nil {
+				n.logf("p2p orphan persist failed %s: %v", orphanHash, err)
+				continue
+			}
+		}
+		connected = append(connected, orphan)
+		connected = append(connected, n.connectOrphansLocked(orphanHash)...)
+	}
+	return connected
+}
+
+func removeHash(hashes []wire.Hash, target wire.Hash) []wire.Hash {
+	out := hashes[:0]
+	for _, hash := range hashes {
+		if hash != target {
+			out = append(out, hash)
+		}
+	}
+	return out
+}
+
+func (n *Node) addBanScore(addr string, delta int, reason string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.banScores[addr] += delta
+	if n.banScores[addr] >= banThreshold {
+		if peer, ok := n.peers[addr]; ok && peer.conn != nil {
+			_ = peer.conn.Close()
+		}
+		n.logf("p2p banned %s score=%d reason=%s", addr, n.banScores[addr], reason)
+	}
+}
+
+func (n *Node) RelayBlock(block *wire.MsgBlock) {
+	if block == nil {
+		return
+	}
+	n.broadcastInventory(block.MustBlockHash(), "")
 }
 
 func (n *Node) logf(format string, args ...any) {
@@ -579,4 +871,18 @@ func randomNonce() (uint64, error) {
 		return 0, err
 	}
 	return binary.LittleEndian.Uint64(b[:]), nil
+}
+
+func shouldBanReadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return false
+	}
+	return true
 }

@@ -22,6 +22,10 @@ const (
 	CommandGetHeaders = "getheaders"
 	CommandHeaders    = "headers"
 	CommandGetBlocks  = "getblocks"
+	CommandInv        = "inv"
+	CommandGetData    = "getdata"
+	CommandGetAddr    = "getaddr"
+	CommandAddr       = "addr"
 	CommandBlock      = "block"
 )
 

@@ -140,6 +140,73 @@ func TestHeaderFirstSyncAndBlockRelay(t *testing.T) {
 	}
 }
 
+func TestInventoryRelayFetchesNewBlock(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	serverChain := blockchain.New(params)
+	clientChain := blockchain.New(params)
+	clientStore := blockstore.New(t.TempDir())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server, err := p2p.NewNode(p2p.Config{
+		Params:     params,
+		ListenAddr: "127.0.0.1:0",
+		MaxPeers:   4,
+		Chain:      serverChain,
+		ChainMu:    &sync.Mutex{},
+		UserAgent:  "/server-inv-test/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Start(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(2 * time.Second):
+			t.Fatal("server did not stop")
+		}
+	})
+	waitForListenAddr(t, server)
+
+	client, err := p2p.NewNode(p2p.Config{
+		Params:    params,
+		MaxPeers:  4,
+		Chain:     clientChain,
+		Store:     clientStore,
+		ChainMu:   &sync.Mutex{},
+		UserAgent: "/client-inv-test/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.DialOnce(ctx, server.ListenAddr()); err != nil {
+		t.Fatal(err)
+	}
+	waitForPeers(t, server, 1)
+	waitForPeers(t, client, 1)
+
+	blockTime := time.Unix(serverChain.Tip().Header.Timestamp, 0).Add(params.TargetTimePerBlock)
+	block, err := mining.MineBlock(serverChain, []byte("SsimMiner"), blockTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := serverChain.AddBlock(block); err != nil {
+		t.Fatal(err)
+	}
+
+	server.RelayBlock(block)
+	waitForHeight(t, clientChain, 1)
+	if clientChain.Tip().MustBlockHash() != block.MustBlockHash() {
+		t.Fatalf("client tip = %s, want %s", clientChain.Tip().MustBlockHash(), block.MustBlockHash())
+	}
+}
+
 func waitForListenAddr(t *testing.T, node *p2p.Node) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

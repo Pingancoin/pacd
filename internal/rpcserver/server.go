@@ -25,11 +25,12 @@ import (
 )
 
 type Server struct {
-	chain   *blockchain.Chain
-	store   *blockstore.Store
-	mux     *http.ServeMux
-	mu      *sync.Mutex
-	mempool []*wire.MsgTx
+	chain            *blockchain.Chain
+	store            *blockstore.Store
+	mux              *http.ServeMux
+	mu               *sync.Mutex
+	mempool          []*wire.MsgTx
+	onBlockConnected func(*wire.MsgBlock)
 }
 
 func New(chain *blockchain.Chain, store *blockstore.Store) *Server {
@@ -62,6 +63,10 @@ func NewWithLock(chain *blockchain.Chain, store *blockstore.Store, mu *sync.Mute
 
 func (s *Server) Handler() http.Handler {
 	return s.mux
+}
+
+func (s *Server) SetBlockConnectedCallback(fn func(*wire.MsgBlock)) {
+	s.onBlockConnected = fn
 }
 
 func (s *Server) ListenAndServe(ctx context.Context, listen string) error {
@@ -358,6 +363,9 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		hashes = append(hashes, block.MustBlockHash().String())
+		if s.onBlockConnected != nil {
+			s.onBlockConnected(block)
+		}
 		if len(txs) > 0 {
 			s.mempool = nil
 		}
