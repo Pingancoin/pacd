@@ -18,17 +18,19 @@ type Version struct {
 	GenesisHash     wire.Hash
 	BestHeight      uint32
 	Nonce           uint64
+	ListenAddr      string
 	UserAgent       string
 	Timestamp       int64
 }
 
-func NewVersion(network string, genesisHash wire.Hash, bestHeight uint32, nonce uint64, userAgent string) Version {
+func NewVersion(network string, genesisHash wire.Hash, bestHeight uint32, nonce uint64, listenAddr string, userAgent string) Version {
 	return Version{
 		ProtocolVersion: ProtocolVersion,
 		Network:         network,
 		GenesisHash:     genesisHash,
 		BestHeight:      bestHeight,
 		Nonce:           nonce,
+		ListenAddr:      listenAddr,
 		UserAgent:       userAgent,
 		Timestamp:       time.Now().UTC().Unix(),
 	}
@@ -47,6 +49,7 @@ func (v Version) Serialize() ([]byte, error) {
 	if err := binary.Write(buf, binary.LittleEndian, v.Nonce); err != nil {
 		return nil, err
 	}
+	writeString(buf, v.ListenAddr)
 	writeString(buf, v.UserAgent)
 	if err := binary.Write(buf, binary.LittleEndian, v.Timestamp); err != nil {
 		return nil, err
@@ -74,6 +77,11 @@ func DeserializeVersion(payload []byte) (Version, error) {
 	if err := binary.Read(reader, binary.LittleEndian, &v.Nonce); err != nil {
 		return v, err
 	}
+	listenAddr, err := readString(reader, 255)
+	if err != nil {
+		return v, err
+	}
+	v.ListenAddr = listenAddr
 	userAgent, err := readString(reader, 128)
 	if err != nil {
 		return v, err

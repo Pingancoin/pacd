@@ -80,11 +80,12 @@ type Node struct {
 }
 
 type PeerInfo struct {
-	Address     string
-	Inbound     bool
-	BestHeight  uint32
-	UserAgent   string
-	ConnectedAt time.Time
+	Address           string
+	AdvertisedAddress string
+	Inbound           bool
+	BestHeight        uint32
+	UserAgent         string
+	ConnectedAt       time.Time
 }
 
 type AddrInfo struct {
@@ -95,9 +96,10 @@ type AddrInfo struct {
 }
 
 type peerState struct {
-	info    PeerInfo
-	conn    net.Conn
-	writeMu sync.Mutex
+	info           PeerInfo
+	conn           net.Conn
+	advertisedAddr string
+	writeMu        sync.Mutex
 }
 
 type addrBookEntry struct {
@@ -308,15 +310,21 @@ func (n *Node) handleConn(ctx context.Context, conn net.Conn, inbound bool) {
 		n.logf("p2p handshake %s failed: %v", addr, err)
 		return
 	}
+	advertisedAddr := normalizeAddr(remoteVersion.ListenAddr)
 	n.updatePeer(addr, PeerInfo{
-		Address:     addr,
-		Inbound:     inbound,
-		BestHeight:  remoteVersion.BestHeight,
-		UserAgent:   remoteVersion.UserAgent,
-		ConnectedAt: time.Now().UTC(),
-	}, conn)
+		Address:           addr,
+		AdvertisedAddress: advertisedAddr,
+		Inbound:           inbound,
+		BestHeight:        remoteVersion.BestHeight,
+		UserAgent:         remoteVersion.UserAgent,
+		ConnectedAt:       time.Now().UTC(),
+	}, conn, advertisedAddr)
+	if advertisedAddr != "" {
+		n.learnAddr(advertisedAddr, addrSourceVerified)
+	}
 	if !inbound {
 		n.learnAddr(addr, addrSourceVerified)
+		n.recordDiscoveryResult(advertisedAddr, true)
 		n.recordDiscoveryResult(addr, true)
 	}
 	n.logf("p2p connected %s inbound=%t height=%d agent=%s", addr, inbound, remoteVersion.BestHeight, remoteVersion.UserAgent)
@@ -337,7 +345,7 @@ func (n *Node) handshake(conn net.Conn, inbound bool) (Version, error) {
 	if err := conn.SetDeadline(time.Now().Add(defaultHandshakeTimeout)); err != nil {
 		return Version{}, err
 	}
-	localVersion := NewVersion(n.cfg.Params.Name, n.cfg.Params.GenesisHash, n.bestHeight(), n.nonce, n.cfg.UserAgent)
+	localVersion := NewVersion(n.cfg.Params.Name, n.cfg.Params.GenesisHash, n.bestHeight(), n.nonce, normalizeAddr(n.ListenAddr()), n.cfg.UserAgent)
 	localPayload, err := localVersion.Serialize()
 	if err != nil {
 		return Version{}, err
@@ -823,7 +831,7 @@ func (n *Node) reservePeer(addr string) bool {
 	return true
 }
 
-func (n *Node) updatePeer(addr string, info PeerInfo, conn net.Conn) {
+func (n *Node) updatePeer(addr string, info PeerInfo, conn net.Conn, advertisedAddr string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	peer, ok := n.peers[addr]
@@ -833,6 +841,7 @@ func (n *Node) updatePeer(addr string, info PeerInfo, conn net.Conn) {
 	}
 	peer.info = info
 	peer.conn = conn
+	peer.advertisedAddr = advertisedAddr
 }
 
 func (n *Node) removePeer(addr string) {
@@ -1029,6 +1038,9 @@ func (n *Node) discoveryCandidates() []string {
 		if _, ok := n.peers[addr]; ok {
 			continue
 		}
+		if n.hasPeerForAdvertisedAddr(addr) {
+			continue
+		}
 		if n.isStaticPeer(addr) {
 			continue
 		}
@@ -1065,6 +1077,15 @@ func (n *Node) discoveryCandidates() []string {
 		return 0
 	})
 	return candidates
+}
+
+func (n *Node) hasPeerForAdvertisedAddr(addr string) bool {
+	for _, peer := range n.peers {
+		if peer.advertisedAddr == addr {
+			return true
+		}
+	}
+	return false
 }
 
 func (n *Node) isStaticPeer(addr string) bool {

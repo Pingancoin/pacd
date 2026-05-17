@@ -490,7 +490,7 @@ func TestAddrBookPersistsDiscoveredAddress(t *testing.T) {
 	})
 	waitForListenAddr(t, peer)
 	waitForKnownAddrs(t, seed, 2)
-	waitForAddrSource(t, seed, peer.ListenAddr(), "discovered")
+	waitForAddrSource(t, seed, peer.ListenAddr(), "verified")
 	waitForAddrBookEntry(t, addrBookPath, peer.ListenAddr())
 }
 
