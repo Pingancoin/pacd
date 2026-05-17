@@ -2,7 +2,9 @@ package p2p_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http/httptest"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -433,6 +435,126 @@ func TestAddressDiscoveryConnectsAdditionalPeer(t *testing.T) {
 	waitForPeerAddress(t, peerC, peerB.ListenAddr())
 }
 
+func TestAddrBookPersistsDiscoveredAddress(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	addrBookPath := t.TempDir() + "/peers.json"
+	seed, err := p2p.NewNode(p2p.Config{
+		Params:       params,
+		ListenAddr:   "127.0.0.1:0",
+		MaxPeers:     8,
+		AddrBookPath: addrBookPath,
+		UserAgent:    "/seed-book-test/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedErrCh := make(chan error, 1)
+	go func() {
+		seedErrCh <- seed.Start(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-seedErrCh:
+		case <-time.After(2 * time.Second):
+			t.Fatal("seed did not stop")
+		}
+	})
+	waitForListenAddr(t, seed)
+
+	peer, err := p2p.NewNode(p2p.Config{
+		Params:     params,
+		ListenAddr: "127.0.0.1:0",
+		Connect:    []string{seed.ListenAddr()},
+		MaxPeers:   8,
+		UserAgent:  "/peer-book-test/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerErrCh := make(chan error, 1)
+	go func() {
+		peerErrCh <- peer.Start(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-peerErrCh:
+		case <-time.After(2 * time.Second):
+			t.Fatal("peer did not stop")
+		}
+	})
+	waitForListenAddr(t, peer)
+	waitForKnownAddrs(t, seed, 2)
+	waitForAddrBookEntry(t, addrBookPath, peer.ListenAddr())
+}
+
+func TestAddrBookBootstrapsDiscovery(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	peerB, err := p2p.NewNode(p2p.Config{
+		Params:     params,
+		ListenAddr: "127.0.0.1:0",
+		MaxPeers:   8,
+		UserAgent:  "/peer-b-book-test/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerBErrCh := make(chan error, 1)
+	go func() {
+		peerBErrCh <- peerB.Start(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-peerBErrCh:
+		case <-time.After(2 * time.Second):
+			t.Fatal("peerB did not stop")
+		}
+	})
+	waitForListenAddr(t, peerB)
+
+	addrBookPath := t.TempDir() + "/peers.json"
+	data, err := json.Marshal([]string{peerB.ListenAddr()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(addrBookPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	node, err := p2p.NewNode(p2p.Config{
+		Params:       params,
+		ListenAddr:   "127.0.0.1:0",
+		MaxPeers:     8,
+		AddrBookPath: addrBookPath,
+		UserAgent:    "/restored-book-test/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeErrCh := make(chan error, 1)
+	go func() {
+		nodeErrCh <- node.Start(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-nodeErrCh:
+		case <-time.After(2 * time.Second):
+			t.Fatal("node did not stop")
+		}
+	})
+	waitForListenAddr(t, node)
+	waitForPeerAddress(t, node, peerB.ListenAddr())
+}
+
 func waitForListenAddr(t *testing.T, node *p2p.Node) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -517,4 +639,24 @@ func waitForPeerAddress(t *testing.T, node *p2p.Node, want string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("peer %s was not discovered; peers=%+v", want, node.Peers())
+}
+
+func waitForAddrBookEntry(t *testing.T, path string, want string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			var addrs []string
+			if err := json.Unmarshal(data, &addrs); err == nil {
+				for _, addr := range addrs {
+					if addr == want {
+						return
+					}
+				}
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("addrbook %s did not contain %s", path, want)
 }

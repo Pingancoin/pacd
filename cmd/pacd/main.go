@@ -394,14 +394,15 @@ func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bo
 		}
 		var err error
 		node, err = p2p.NewNode(p2p.Config{
-			Params:     chain.Params(),
-			ListenAddr: listen,
-			Connect:    peers,
-			MaxPeers:   maxPeers,
-			Chain:      chain,
-			Store:      store,
-			ChainMu:    chainMu,
-			Logger:     log.New(os.Stdout, "", 0),
+			Params:       chain.Params(),
+			ListenAddr:   listen,
+			Connect:      peers,
+			MaxPeers:     maxPeers,
+			Chain:        chain,
+			Store:        store,
+			ChainMu:      chainMu,
+			AddrBookPath: filepath.Join(filepath.Dir(store.Path()), "peers.json"),
+			Logger:       log.New(os.Stdout, "", 0),
 		})
 		if err != nil {
 			exit(err)

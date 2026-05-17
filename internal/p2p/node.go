@@ -4,11 +4,15 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +45,7 @@ type Config struct {
 	Chain            *blockchain.Chain
 	Store            *blockstore.Store
 	ChainMu          *sync.Mutex
+	AddrBookPath     string
 	HasTx            func(wire.Hash) bool
 	TxByHash         func(wire.Hash) (*wire.MsgTx, bool)
 	AcceptTx         func(*wire.MsgTx) (bool, error)
@@ -58,6 +63,7 @@ type Node struct {
 	peers         map[string]*peerState
 	knownAddrs    map[string]struct{}
 	recentDials   map[string]time.Time
+	dialFailures  map[string]int
 	orphans       map[wire.Hash]*wire.MsgBlock
 	orphansByPrev map[wire.Hash][]wire.Hash
 	banScores     map[string]int
@@ -100,9 +106,13 @@ func NewNode(cfg Config) (*Node, error) {
 		peers:         make(map[string]*peerState),
 		knownAddrs:    make(map[string]struct{}),
 		recentDials:   make(map[string]time.Time),
+		dialFailures:  make(map[string]int),
 		orphans:       make(map[wire.Hash]*wire.MsgBlock),
 		orphansByPrev: make(map[wire.Hash][]wire.Hash),
 		banScores:     make(map[string]int),
+	}
+	if err := node.loadAddrBook(); err != nil {
+		return nil, err
 	}
 	node.rememberAddr(cfg.ListenAddr)
 	for _, addr := range cfg.Connect {
@@ -257,6 +267,7 @@ func (n *Node) handleConn(ctx context.Context, conn net.Conn, inbound bool) {
 	}, conn)
 	if !inbound {
 		n.rememberAddr(addr)
+		n.recordDiscoveryResult(addr, true)
 	}
 	n.logf("p2p connected %s inbound=%t height=%d agent=%s", addr, inbound, remoteVersion.BestHeight, remoteVersion.UserAgent)
 	if remoteVersion.BestHeight > n.bestHeight() {
@@ -855,8 +866,13 @@ func (n *Node) rememberAddr(addr string) {
 		return
 	}
 	n.mu.Lock()
-	defer n.mu.Unlock()
+	if _, ok := n.knownAddrs[addr]; ok {
+		n.mu.Unlock()
+		return
+	}
 	n.knownAddrs[addr] = struct{}{}
+	n.mu.Unlock()
+	n.persistAddrBook()
 }
 
 func (n *Node) discoveryLoop(ctx context.Context) {
@@ -880,6 +896,7 @@ func (n *Node) discoveryStep(ctx context.Context) {
 		addr := addr
 		go func() {
 			if err := n.connectAndHandle(ctx, addr); err != nil && ctx.Err() == nil {
+				n.recordDiscoveryResult(addr, false)
 				n.logf("p2p discovered connect %s failed: %v", addr, err)
 			}
 		}()
@@ -909,7 +926,7 @@ func (n *Node) discoveryCandidates() []string {
 		if n.banScores[addr] >= banThreshold {
 			continue
 		}
-		if last, ok := n.recentDials[addr]; ok && now.Sub(last) < defaultDiscoveryRetry {
+		if last, ok := n.recentDials[addr]; ok && now.Sub(last) < n.discoveryRetryDelay(addr) {
 			continue
 		}
 		n.recentDials[addr] = now
@@ -925,6 +942,95 @@ func (n *Node) isStaticPeer(addr string) bool {
 		}
 	}
 	return false
+}
+
+func (n *Node) recordDiscoveryResult(addr string, success bool) {
+	addr = normalizeAddr(addr)
+	if addr == "" {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if success {
+		delete(n.dialFailures, addr)
+		return
+	}
+	n.dialFailures[addr]++
+}
+
+func (n *Node) discoveryRetryDelay(addr string) time.Duration {
+	failures := n.dialFailures[addr]
+	if failures <= 0 {
+		return defaultDiscoveryRetry
+	}
+	delay := defaultDiscoveryRetry
+	for i := 1; i < failures && delay < time.Minute; i++ {
+		delay *= 2
+	}
+	if delay > time.Minute {
+		delay = time.Minute
+	}
+	return delay
+}
+
+func (n *Node) loadAddrBook() error {
+	if n.cfg.AddrBookPath == "" {
+		return nil
+	}
+	data, err := os.ReadFile(n.cfg.AddrBookPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var addrs []string
+	if err := json.Unmarshal(data, &addrs); err != nil {
+		return fmt.Errorf("decode addrbook %s: %w", n.cfg.AddrBookPath, err)
+	}
+	for _, addr := range addrs {
+		addr = normalizeAddr(addr)
+		if addr == "" {
+			continue
+		}
+		n.knownAddrs[addr] = struct{}{}
+	}
+	return nil
+}
+
+func (n *Node) persistAddrBook() {
+	if n.cfg.AddrBookPath == "" {
+		return
+	}
+	addrs := n.addrBookEntries()
+	if err := os.MkdirAll(filepath.Dir(n.cfg.AddrBookPath), 0o755); err != nil {
+		n.logf("p2p addrbook mkdir failed: %v", err)
+		return
+	}
+	data, err := json.MarshalIndent(addrs, "", "  ")
+	if err != nil {
+		n.logf("p2p addrbook encode failed: %v", err)
+		return
+	}
+	tmp := n.cfg.AddrBookPath + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+		n.logf("p2p addrbook write failed: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, n.cfg.AddrBookPath); err != nil {
+		n.logf("p2p addrbook replace failed: %v", err)
+	}
+}
+
+func (n *Node) addrBookEntries() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	addrs := make([]string, 0, len(n.knownAddrs))
+	for addr := range n.knownAddrs {
+		addrs = append(addrs, addr)
+	}
+	slices.Sort(addrs)
+	return addrs
 }
 
 func normalizeAddr(addr string) string {
