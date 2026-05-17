@@ -16,6 +16,7 @@ const (
 	MaxAddrItems         = 1000
 	MaxAddrLength        = 255
 
+	InvTypeTx    uint32 = 1
 	InvTypeBlock uint32 = 2
 )
 

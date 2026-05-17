@@ -382,6 +382,7 @@ func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bo
 	chainMu := &sync.Mutex{}
 	errCh := make(chan error, 2)
 	var node *p2p.Node
+	var server *rpcserver.Server
 	if p2pEnabled {
 		listen := p2pListen
 		if listen == "" {
@@ -411,12 +412,16 @@ func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bo
 		}
 	}
 	if rpcEnabled {
+		server = rpcserver.NewWithLock(chain, store, chainMu)
+		if node != nil {
+			server.SetBlockConnectedCallback(node.RelayBlock)
+			server.SetTransactionAcceptedCallback(node.RelayTransaction)
+			node.SetTransactionCallbacks(server.HasTransaction, server.TransactionByHash, server.AcceptTransaction)
+		}
+	}
+	if rpcEnabled {
 		fmt.Printf("rpc listening on http://%s\n", rpcListen)
 		go func() {
-			server := rpcserver.NewWithLock(chain, store, chainMu)
-			if node != nil {
-				server.SetBlockConnectedCallback(node.RelayBlock)
-			}
 			errCh <- server.ListenAndServe(ctx, rpcListen)
 		}()
 	}

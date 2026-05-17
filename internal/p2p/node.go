@@ -38,6 +38,9 @@ type Config struct {
 	Chain      *blockchain.Chain
 	Store      *blockstore.Store
 	ChainMu    *sync.Mutex
+	HasTx      func(wire.Hash) bool
+	TxByHash   func(wire.Hash) (*wire.MsgTx, bool)
+	AcceptTx   func(*wire.MsgTx) (bool, error)
 	UserAgent  string
 	Logger     *log.Logger
 }
@@ -115,6 +118,12 @@ func (n *Node) PeerCount() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return len(n.peers)
+}
+
+func (n *Node) SetTransactionCallbacks(hasTx func(wire.Hash) bool, txByHash func(wire.Hash) (*wire.MsgTx, bool), acceptTx func(*wire.MsgTx) (bool, error)) {
+	n.cfg.HasTx = hasTx
+	n.cfg.TxByHash = txByHash
+	n.cfg.AcceptTx = acceptTx
 }
 
 func (n *Node) Peers() []PeerInfo {
@@ -366,6 +375,12 @@ func (n *Node) readLoop(ctx context.Context, conn net.Conn, addr string) {
 				n.logf("p2p getdata from %s failed: %v", addr, err)
 				return
 			}
+		case CommandTx:
+			if err := n.handleTx(addr, msg.Payload); err != nil {
+				n.addBanScore(addr, banScoreInvalidChain, "tx")
+				n.logf("p2p tx from %s failed: %v", addr, err)
+				return
+			}
 		case CommandGetAddr:
 			if err := n.sendAddr(addr); err != nil {
 				n.logf("p2p getaddr from %s failed: %v", addr, err)
@@ -455,10 +470,16 @@ func (n *Node) handleInv(addr string, payload []byte) error {
 	}
 	requests := make([]InvVector, 0, len(inv.Items))
 	for _, item := range inv.Items {
-		if item.Type != InvTypeBlock {
-			continue
-		}
-		if n.hasBlock(item.Hash) {
+		switch item.Type {
+		case InvTypeBlock:
+			if n.hasBlock(item.Hash) {
+				continue
+			}
+		case InvTypeTx:
+			if n.hasTx(item.Hash) {
+				continue
+			}
+		default:
 			continue
 		}
 		requests = append(requests, item)
@@ -479,19 +500,31 @@ func (n *Node) handleGetData(addr string, payload []byte) error {
 		return err
 	}
 	for _, item := range req.Items {
-		if item.Type != InvTypeBlock {
-			continue
-		}
-		block, ok := n.blockByHash(item.Hash)
-		if !ok {
-			continue
-		}
-		serialized, err := block.Serialize()
-		if err != nil {
-			return err
-		}
-		if err := n.writePeerMessage(addr, Message{Command: CommandBlock, Payload: serialized}); err != nil {
-			return err
+		switch item.Type {
+		case InvTypeBlock:
+			block, ok := n.blockByHash(item.Hash)
+			if !ok {
+				continue
+			}
+			serialized, err := block.Serialize()
+			if err != nil {
+				return err
+			}
+			if err := n.writePeerMessage(addr, Message{Command: CommandBlock, Payload: serialized}); err != nil {
+				return err
+			}
+		case InvTypeTx:
+			tx, ok := n.txByHash(item.Hash)
+			if !ok {
+				continue
+			}
+			serialized, err := tx.Serialize()
+			if err != nil {
+				return err
+			}
+			if err := n.writePeerMessage(addr, Message{Command: CommandTx, Payload: serialized}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -525,6 +558,28 @@ func (n *Node) handleBlock(addr string, payload []byte) error {
 	}
 	if info, ok := n.peerInfo(addr); ok && info.BestHeight > n.bestHeight() {
 		return n.sendGetHeaders(addr)
+	}
+	return nil
+}
+
+func (n *Node) handleTx(addr string, payload []byte) error {
+	tx, err := wire.DeserializeTx(payload)
+	if err != nil {
+		return err
+	}
+	if tx.IsCoinbase() {
+		return fmt.Errorf("coinbase transactions are not accepted into mempool")
+	}
+	if n.cfg.AcceptTx == nil {
+		return nil
+	}
+	accepted, err := n.cfg.AcceptTx(tx)
+	if err != nil {
+		return err
+	}
+	if accepted {
+		n.logf("p2p accepted tx %s", tx.MustTxHash())
+		n.broadcastInv([]InvVector{{Type: InvTypeTx, Hash: tx.MustTxHash()}}, addr)
 	}
 	return nil
 }
@@ -719,8 +774,8 @@ func (n *Node) writePeerMessage(addr string, msg Message) error {
 	return WriteMessage(peer.conn, n.cfg.Params.NetworkMagic, msg)
 }
 
-func (n *Node) broadcastInventory(hash wire.Hash, exceptAddr string) {
-	serialized, err := (Inventory{Items: []InvVector{{Type: InvTypeBlock, Hash: hash}}}).Serialize()
+func (n *Node) broadcastInv(items []InvVector, exceptAddr string) {
+	serialized, err := (Inventory{Items: items}).Serialize()
 	if err != nil {
 		n.logf("p2p inventory serialize failed: %v", err)
 		return
@@ -742,6 +797,10 @@ func (n *Node) broadcastInventory(hash wire.Hash, exceptAddr string) {
 			n.logf("p2p inventory relay failed: %v", err)
 		}
 	}
+}
+
+func (n *Node) broadcastInventory(hash wire.Hash, exceptAddr string) {
+	n.broadcastInv([]InvVector{{Type: InvTypeBlock, Hash: hash}}, exceptAddr)
 }
 
 func (n *Node) sendAddr(addr string) error {
@@ -780,6 +839,20 @@ func (n *Node) hasBlock(hash wire.Hash) bool {
 	defer n.mu.Unlock()
 	_, ok := n.orphans[hash]
 	return ok
+}
+
+func (n *Node) hasTx(hash wire.Hash) bool {
+	if n.cfg.HasTx == nil {
+		return false
+	}
+	return n.cfg.HasTx(hash)
+}
+
+func (n *Node) txByHash(hash wire.Hash) (*wire.MsgTx, bool) {
+	if n.cfg.TxByHash == nil {
+		return nil, false
+	}
+	return n.cfg.TxByHash(hash)
 }
 
 func (n *Node) addOrphanLocked(block *wire.MsgBlock) {
@@ -856,6 +929,13 @@ func (n *Node) RelayBlock(block *wire.MsgBlock) {
 		return
 	}
 	n.broadcastInventory(block.MustBlockHash(), "")
+}
+
+func (n *Node) RelayTransaction(tx *wire.MsgTx) {
+	if tx == nil {
+		return
+	}
+	n.broadcastInv([]InvVector{{Type: InvTypeTx, Hash: tx.MustTxHash()}}, "")
 }
 
 func (n *Node) logf(format string, args ...any) {

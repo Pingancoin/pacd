@@ -26,6 +26,7 @@ const (
 	CommandGetData    = "getdata"
 	CommandGetAddr    = "getaddr"
 	CommandAddr       = "addr"
+	CommandTx         = "tx"
 	CommandBlock      = "block"
 )
 

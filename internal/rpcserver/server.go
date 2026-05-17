@@ -31,6 +31,7 @@ type Server struct {
 	mu               *sync.Mutex
 	mempool          []*wire.MsgTx
 	onBlockConnected func(*wire.MsgBlock)
+	onTxAccepted     func(*wire.MsgTx)
 }
 
 func New(chain *blockchain.Chain, store *blockstore.Store) *Server {
@@ -67,6 +68,57 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) SetBlockConnectedCallback(fn func(*wire.MsgBlock)) {
 	s.onBlockConnected = fn
+}
+
+func (s *Server) SetTransactionAcceptedCallback(fn func(*wire.MsgTx)) {
+	s.onTxAccepted = fn
+}
+
+func (s *Server) AcceptTransaction(tx *wire.MsgTx) (bool, error) {
+	if tx == nil {
+		return false, fmt.Errorf("transaction is nil")
+	}
+	if tx.IsCoinbase() {
+		return false, fmt.Errorf("coinbase transactions are not accepted into mempool")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	txHash := tx.MustTxHash()
+	for _, existing := range s.mempool {
+		if existing.MustTxHash() == txHash {
+			return false, nil
+		}
+	}
+	candidate := append(append([]*wire.MsgTx(nil), s.mempool...), tx)
+	if _, err := s.chain.CalcFees(candidate); err != nil {
+		return false, err
+	}
+	s.mempool = candidate
+	return true, nil
+}
+
+func (s *Server) HasTransaction(hash wire.Hash) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, tx := range s.mempool {
+		if tx.MustTxHash() == hash {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) TransactionByHash(hash wire.Hash) (*wire.MsgTx, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, tx := range s.mempool {
+		if tx.MustTxHash() == hash {
+			return tx, true
+		}
+	}
+	return nil, false
 }
 
 func (s *Server) ListenAndServe(ctx context.Context, listen string) error {
@@ -286,23 +338,21 @@ func (s *Server) handleSubmitRawTransaction(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if tx.IsCoinbase() {
-		writeError(w, http.StatusBadRequest, "coinbase transactions are not accepted into mempool")
-		return
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	candidate := append(append([]*wire.MsgTx(nil), s.mempool...), tx)
-	if _, err := s.chain.CalcFees(candidate); err != nil {
+	accepted, err := s.AcceptTransaction(tx)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.mempool = candidate
+	if accepted && s.onTxAccepted != nil {
+		s.onTxAccepted(tx)
+	}
+	s.mu.Lock()
+	mempoolSize := len(s.mempool)
+	s.mu.Unlock()
 	writeJSON(w, map[string]any{
-		"accepted":    true,
+		"accepted":    accepted,
 		"txid":        tx.MustTxHash().String(),
-		"mempoolsize": len(s.mempool),
+		"mempoolsize": mempoolSize,
 	})
 }
 
