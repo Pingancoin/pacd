@@ -3,7 +3,9 @@ package rpcserver_test
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,9 +15,11 @@ import (
 	"github.com/Pingancoin/pacd/internal/blockchain"
 	"github.com/Pingancoin/pacd/internal/blockstore"
 	"github.com/Pingancoin/pacd/internal/chaincfg"
+	"github.com/Pingancoin/pacd/internal/consensus"
 	"github.com/Pingancoin/pacd/internal/mining"
 	"github.com/Pingancoin/pacd/internal/rpcserver"
 	"github.com/Pingancoin/pacd/internal/wallet"
+	"github.com/Pingancoin/pacd/internal/wire"
 )
 
 func TestHandlers(t *testing.T) {
@@ -220,6 +224,112 @@ func TestSubmitRawTransactionAndGenerate(t *testing.T) {
 	}
 }
 
+func TestGetBlockTemplateAndSubmitBlock(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	chain := blockchain.New(params)
+	walletDir := t.TempDir()
+	w, err := wallet.Create(wallet.Path(walletDir, params.Name), params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.AddKey(params, "recipient"); err != nil {
+		t.Fatal(err)
+	}
+
+	minerScript, err := address.DecodeAddressScript(params, w.Keys[0].Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockTime := time.Unix(params.GenesisBlock.Header.Timestamp, 0).Add(params.TargetTimePerBlock)
+	block1, err := mining.MineBlock(chain, minerScript, blockTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.AddBlock(block1); err != nil {
+		t.Fatal(err)
+	}
+	blockTime = blockTime.Add(params.TargetTimePerBlock)
+	block2, err := mining.MineBlock(chain, minerScript, blockTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.AddBlock(block2); err != nil {
+		t.Fatal(err)
+	}
+
+	server := rpcserver.New(chain, blockstore.New(t.TempDir()))
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	coinbase := block1.Transactions[0]
+	balance := wallet.Balance{UTXOs: []wallet.UTXO{{
+		Address:  w.Keys[0].Address,
+		TxHash:   coinbase.MustTxHash().String(),
+		Vout:     0,
+		Value:    coinbase.TxOut[0].Value,
+		Height:   block1.Header.Height,
+		Coinbase: true,
+		Mature:   true,
+	}}}
+	draft, err := wallet.BuildDraftTx(params, w, balance, w.Keys[1].Address, chaincfg.Coin, 10_000, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wallet.SignDraftTx(params, w, draft); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wallet.SubmitRawTransaction(httpServer.URL, draft.Tx); err != nil {
+		t.Fatal(err)
+	}
+
+	var template struct {
+		Height         uint32   `json:"height"`
+		MempoolSize    int      `json:"mempoolsize"`
+		TotalFees      int64    `json:"totalfees"`
+		CoinbaseTxID   string   `json:"coinbasetxid"`
+		HeaderHex      string   `json:"headerhex"`
+		BlockHex       string   `json:"blockhex"`
+		TransactionIDs []string `json:"transactionids"`
+	}
+	postJSON(t, httpServer.URL+"/getblocktemplate", map[string]any{
+		"address": w.Keys[0].Address,
+	}, &template)
+	if template.Height != 3 || template.MempoolSize != 1 || template.TotalFees <= 0 || template.CoinbaseTxID == "" || template.HeaderHex == "" || template.BlockHex == "" || len(template.TransactionIDs) != 1 {
+		t.Fatalf("unexpected template: %+v", template)
+	}
+
+	blockBytes, err := hex.DecodeString(template.BlockHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := wire.DeserializeBlock(blockBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	solveBlock(t, block, params)
+
+	var submitted struct {
+		Accepted bool   `json:"accepted"`
+		Hash     string `json:"hash"`
+		Height   uint32 `json:"height"`
+	}
+	postJSON(t, httpServer.URL+"/submitblock", map[string]any{
+		"blockhex": hex.EncodeToString(mustBlockBytes(t, block)),
+	}, &submitted)
+	if !submitted.Accepted || submitted.Height != 3 || submitted.Hash == "" {
+		t.Fatalf("unexpected submit block result: %+v", submitted)
+	}
+
+	var best struct {
+		Height uint32 `json:"height"`
+		Hash   string `json:"hash"`
+	}
+	getJSON(t, httpServer.URL+"/getbestblock", &best)
+	if best.Height != 3 || best.Hash != submitted.Hash {
+		t.Fatalf("unexpected best block: %+v", best)
+	}
+}
+
 func TestNetworkInfoAndPeerInfo(t *testing.T) {
 	params := chaincfg.SimNetParams()
 	chain := blockchain.New(params)
@@ -293,4 +403,27 @@ func postJSON(t *testing.T, url string, body any, dest any) {
 	if err := json.NewDecoder(resp.Body).Decode(dest); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func solveBlock(t *testing.T, block *wire.MsgBlock, params *chaincfg.Params) {
+	t.Helper()
+	for nonce := uint32(0); nonce <= math.MaxUint32; nonce++ {
+		block.Header.Nonce = nonce
+		if consensus.CheckProofOfWork(&block.Header, params) == nil {
+			return
+		}
+		if nonce == math.MaxUint32 {
+			break
+		}
+	}
+	t.Fatal("failed to solve template block")
+}
+
+func mustBlockBytes(t *testing.T, block *wire.MsgBlock) []byte {
+	t.Helper()
+	serialized, err := block.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return serialized
 }

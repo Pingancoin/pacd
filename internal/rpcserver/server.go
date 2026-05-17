@@ -67,10 +67,12 @@ func NewWithLock(chain *blockchain.Chain, store *blockstore.Store, mu *sync.Mute
 	server.mux.HandleFunc("/getrawtransaction/", server.handleGetRawTransaction)
 	server.mux.HandleFunc("/getaddressutxos/", server.handleGetAddressUTXOs)
 	server.mux.HandleFunc("/getmininginfo", server.handleGetMiningInfo)
+	server.mux.HandleFunc("/getblocktemplate", server.handleGetBlockTemplate)
 	server.mux.HandleFunc("/getnetworkinfo", server.handleGetNetworkInfo)
 	server.mux.HandleFunc("/getpeerinfo", server.handleGetPeerInfo)
 	server.mux.HandleFunc("/getrawmempool", server.handleGetRawMempool)
 	server.mux.HandleFunc("/submitrawtransaction", server.handleSubmitRawTransaction)
+	server.mux.HandleFunc("/submitblock", server.handleSubmitBlock)
 	server.mux.HandleFunc("/generate", server.handleGenerate)
 	return server
 }
@@ -194,10 +196,12 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 			"/getrawtransaction/{txid}",
 			"/getaddressutxos/{address}",
 			"/getmininginfo",
+			"/getblocktemplate",
 			"/getnetworkinfo",
 			"/getpeerinfo",
 			"/getrawmempool",
 			"/submitrawtransaction",
+			"/submitblock",
 			"/generate",
 		},
 	})
@@ -334,6 +338,82 @@ func (s *Server) handleGetMiningInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleGetBlockTemplate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req blockTemplateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid block template request")
+		return
+	}
+	if strings.TrimSpace(req.Address) == "" {
+		writeError(w, http.StatusBadRequest, "miner address is required")
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	params := s.chain.Params()
+	minerScript, err := address.DecodeAddressScript(params, req.Address)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("miner address: %v", err))
+		return
+	}
+	nextTime := templateTime(s.chain.Tip().Header.Timestamp, req.Timestamp)
+	txs := append([]*wire.MsgTx(nil), s.mempool...)
+	block, err := mining.NewCandidateWithTransactions(s.chain, minerScript, nextTime, txs)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	headerHex, err := serializeHeaderHex(block.Header)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	blockHex, err := serializeBlockHex(block)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	totalFees, err := s.chain.CalcFees(txs)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result := blockTemplateResult{
+		Network:           params.Name,
+		Height:            block.Header.Height,
+		PreviousBlockHash: block.Header.PrevBlock.String(),
+		Bits:              fmt.Sprintf("%08x", block.Header.Bits),
+		Difficulty:        consensus.DifficultyRatio(block.Header.Bits, params).FloatString(4),
+		Timestamp:         block.Header.Timestamp,
+		TargetSpacingSec:  int64(params.TargetTimePerBlock / time.Second),
+		MempoolSize:       len(s.mempool),
+		Transactions:      transactionResults(params, txs),
+		TransactionIDs:    txIDs(txs),
+		HeaderHex:         headerHex,
+		BlockHex:          blockHex,
+		Mutable:           []string{"nonce", "time"},
+	}
+	if len(block.Transactions) > 0 {
+		coinbase := block.Transactions[0]
+		result.CoinbaseTxID = coinbase.MustTxHash().String()
+		if len(coinbase.TxOut) > 0 {
+			result.NextSubsidy.Miner = coinbase.TxOut[0].Value
+		}
+		if len(coinbase.TxOut) > 1 {
+			result.NextSubsidy.Project = coinbase.TxOut[1].Value
+		}
+		result.NextSubsidy.Total = result.NextSubsidy.Miner + result.NextSubsidy.Project
+	}
+	result.TotalFees = totalFees
+	writeJSON(w, result)
+}
+
 func (s *Server) handleGetNetworkInfo(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -429,6 +509,49 @@ func (s *Server) handleSubmitRawTransaction(w http.ResponseWriter, r *http.Reque
 		"accepted":    accepted,
 		"txid":        tx.MustTxHash().String(),
 		"mempoolsize": mempoolSize,
+	})
+}
+
+func (s *Server) handleSubmitBlock(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	blockHex, err := readBlockHex(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	blockBytes, err := hex.DecodeString(strings.TrimSpace(blockHex))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid block hex")
+		return
+	}
+	block, err := wire.DeserializeBlock(blockBytes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.chain.AddBlock(block); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.store.Append(block); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.pruneMempoolLocked(block)
+	if s.onBlockConnected != nil {
+		s.onBlockConnected(block)
+	}
+	writeJSON(w, map[string]any{
+		"accepted": true,
+		"hash":     block.MustBlockHash().String(),
+		"height":   block.Header.Height,
 	})
 }
 
@@ -695,6 +818,41 @@ type generateRequest struct {
 	MaxNonce uint32 `json:"maxnonce"`
 }
 
+type blockTemplateRequest struct {
+	Address   string `json:"address"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+type submitBlockRequest struct {
+	Hex      string `json:"hex"`
+	BlockHex string `json:"blockhex"`
+}
+
+type subsidySplitResult struct {
+	Miner   int64 `json:"miner"`
+	Project int64 `json:"project"`
+	Total   int64 `json:"total"`
+}
+
+type blockTemplateResult struct {
+	Network           string              `json:"network"`
+	Height            uint32              `json:"height"`
+	PreviousBlockHash string              `json:"previousblockhash"`
+	Bits              string              `json:"bits"`
+	Difficulty        string              `json:"difficulty"`
+	Timestamp         int64               `json:"timestamp"`
+	TargetSpacingSec  int64               `json:"targetspacingsec"`
+	MempoolSize       int                 `json:"mempoolsize"`
+	TotalFees         int64               `json:"totalfees"`
+	NextSubsidy       subsidySplitResult  `json:"nextsubsidy"`
+	CoinbaseTxID      string              `json:"coinbasetxid"`
+	TransactionIDs    []string            `json:"transactionids"`
+	Transactions      []transactionResult `json:"transactions"`
+	HeaderHex         string              `json:"headerhex"`
+	BlockHex          string              `json:"blockhex"`
+	Mutable           []string            `json:"mutable"`
+}
+
 func blockVerbose(params *chaincfg.Params, block *wire.MsgBlock) blockVerboseResult {
 	miner, project := consensus.CalcBlockOneTimeSplit(int64(block.Header.Height), params)
 	result := blockVerboseResult{
@@ -731,6 +889,60 @@ func readTxHex(r *http.Request) (string, error) {
 		return txHex, nil
 	}
 	return string(body), nil
+}
+
+func readBlockHex(r *http.Request) (string, error) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 4*1024*1024))
+	if err != nil {
+		return "", err
+	}
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		return "", fmt.Errorf("empty block body")
+	}
+	if strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+		var req submitBlockRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			return "", fmt.Errorf("invalid JSON body")
+		}
+		blockHex := strings.TrimSpace(req.BlockHex)
+		if blockHex == "" {
+			blockHex = strings.TrimSpace(req.Hex)
+		}
+		if blockHex == "" {
+			return "", fmt.Errorf("block hex is required")
+		}
+		return blockHex, nil
+	}
+	return string(body), nil
+}
+
+func serializeHeaderHex(header wire.BlockHeader) (string, error) {
+	serialized, err := header.Serialize()
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(serialized), nil
+}
+
+func serializeBlockHex(block *wire.MsgBlock) (string, error) {
+	serialized, err := block.Serialize()
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(serialized), nil
+}
+
+func templateTime(tipTimestamp int64, requested int64) time.Time {
+	nextTime := time.Now().UTC()
+	if requested > 0 {
+		nextTime = time.Unix(requested, 0).UTC()
+	}
+	tipTime := time.Unix(tipTimestamp, 0).UTC()
+	if !nextTime.After(tipTime) {
+		nextTime = tipTime.Add(time.Second)
+	}
+	return nextTime
 }
 
 func txIDs(txs []*wire.MsgTx) []string {
