@@ -351,6 +351,88 @@ func TestTransactionRelayFetchesNewTx(t *testing.T) {
 	})
 }
 
+func TestAddressDiscoveryConnectsAdditionalPeer(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	seed, err := p2p.NewNode(p2p.Config{
+		Params:     params,
+		ListenAddr: "127.0.0.1:0",
+		MaxPeers:   8,
+		UserAgent:  "/seed-test/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedErrCh := make(chan error, 1)
+	go func() {
+		seedErrCh <- seed.Start(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-seedErrCh:
+		case <-time.After(2 * time.Second):
+			t.Fatal("seed did not stop")
+		}
+	})
+	waitForListenAddr(t, seed)
+
+	peerB, err := p2p.NewNode(p2p.Config{
+		Params:     params,
+		ListenAddr: "127.0.0.1:0",
+		Connect:    []string{seed.ListenAddr()},
+		MaxPeers:   8,
+		UserAgent:  "/peer-b-test/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerBErrCh := make(chan error, 1)
+	go func() {
+		peerBErrCh <- peerB.Start(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-peerBErrCh:
+		case <-time.After(2 * time.Second):
+			t.Fatal("peerB did not stop")
+		}
+	})
+	waitForListenAddr(t, peerB)
+	waitForPeers(t, seed, 1)
+	waitForPeers(t, peerB, 1)
+	waitForKnownAddrs(t, seed, 2)
+
+	peerC, err := p2p.NewNode(p2p.Config{
+		Params:     params,
+		ListenAddr: "127.0.0.1:0",
+		Connect:    []string{seed.ListenAddr()},
+		MaxPeers:   8,
+		UserAgent:  "/peer-c-test/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerCErrCh := make(chan error, 1)
+	go func() {
+		peerCErrCh <- peerC.Start(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-peerCErrCh:
+		case <-time.After(2 * time.Second):
+			t.Fatal("peerC did not stop")
+		}
+	})
+	waitForListenAddr(t, peerC)
+	waitForPeers(t, seed, 2)
+	waitForPeerAddress(t, peerC, peerB.ListenAddr())
+}
+
 func waitForListenAddr(t *testing.T, node *p2p.Node) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -409,4 +491,30 @@ func waitForTxAbsent(t *testing.T, ok func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("transaction was not pruned")
+}
+
+func waitForKnownAddrs(t *testing.T, node *p2p.Node, wantAtLeast int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if node.KnownAddressCount() >= wantAtLeast {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("known addr count = %d, want at least %d", node.KnownAddressCount(), wantAtLeast)
+}
+
+func waitForPeerAddress(t *testing.T, node *p2p.Node, want string) {
+	t.Helper()
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, peer := range node.Peers() {
+			if peer.Address == want {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("peer %s was not discovered; peers=%+v", want, node.Peers())
 }

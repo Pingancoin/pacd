@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,13 +21,15 @@ import (
 )
 
 const (
-	defaultHandshakeTimeout = 10 * time.Second
-	defaultIdleTimeout      = 2 * time.Minute
-	defaultMaxPeers         = 32
-	defaultMaxOrphans       = 128
-	banThreshold            = 100
-	banScoreMalformed       = 100
-	banScoreInvalidChain    = 50
+	defaultHandshakeTimeout  = 10 * time.Second
+	defaultIdleTimeout       = 2 * time.Minute
+	defaultMaxPeers          = 32
+	defaultMaxOrphans        = 128
+	defaultDiscoveryInterval = 500 * time.Millisecond
+	defaultDiscoveryRetry    = 5 * time.Second
+	banThreshold             = 100
+	banScoreMalformed        = 100
+	banScoreInvalidChain     = 50
 )
 
 type Config struct {
@@ -54,6 +57,7 @@ type Node struct {
 	mu            sync.Mutex
 	peers         map[string]*peerState
 	knownAddrs    map[string]struct{}
+	recentDials   map[string]time.Time
 	orphans       map[wire.Hash]*wire.MsgBlock
 	orphansByPrev map[wire.Hash][]wire.Hash
 	banScores     map[string]int
@@ -95,20 +99,21 @@ func NewNode(cfg Config) (*Node, error) {
 		nonce:         nonce,
 		peers:         make(map[string]*peerState),
 		knownAddrs:    make(map[string]struct{}),
+		recentDials:   make(map[string]time.Time),
 		orphans:       make(map[wire.Hash]*wire.MsgBlock),
 		orphansByPrev: make(map[wire.Hash][]wire.Hash),
 		banScores:     make(map[string]int),
 	}
-	if cfg.ListenAddr != "" {
-		node.knownAddrs[cfg.ListenAddr] = struct{}{}
-	}
+	node.rememberAddr(cfg.ListenAddr)
 	for _, addr := range cfg.Connect {
-		node.knownAddrs[addr] = struct{}{}
+		node.rememberAddr(addr)
 	}
 	return node, nil
 }
 
 func (n *Node) ListenAddr() string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	if n.listener == nil {
 		return n.cfg.ListenAddr
 	}
@@ -153,7 +158,10 @@ func (n *Node) Start(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		n.mu.Lock()
 		n.listener = listener
+		n.mu.Unlock()
+		n.rememberAddr(listener.Addr().String())
 		go n.acceptLoop(ctx, listener)
 	}
 
@@ -161,10 +169,14 @@ func (n *Node) Start(ctx context.Context) error {
 		addr := addr
 		go n.connectLoop(ctx, addr)
 	}
+	go n.discoveryLoop(ctx)
 
 	<-ctx.Done()
-	if n.listener != nil {
-		_ = n.listener.Close()
+	n.mu.Lock()
+	listener := n.listener
+	n.mu.Unlock()
+	if listener != nil {
+		_ = listener.Close()
 	}
 	return nil
 }
@@ -243,7 +255,9 @@ func (n *Node) handleConn(ctx context.Context, conn net.Conn, inbound bool) {
 		UserAgent:   remoteVersion.UserAgent,
 		ConnectedAt: time.Now().UTC(),
 	}, conn)
-	n.rememberAddr(addr)
+	if !inbound {
+		n.rememberAddr(addr)
+	}
 	n.logf("p2p connected %s inbound=%t height=%d agent=%s", addr, inbound, remoteVersion.BestHeight, remoteVersion.UserAgent)
 	if remoteVersion.BestHeight > n.bestHeight() {
 		if err := n.sendGetHeaders(addr); err != nil {
@@ -836,9 +850,96 @@ func (n *Node) knownAddresses() []string {
 }
 
 func (n *Node) rememberAddr(addr string) {
+	addr = normalizeAddr(addr)
+	if addr == "" {
+		return
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.knownAddrs[addr] = struct{}{}
+}
+
+func (n *Node) discoveryLoop(ctx context.Context) {
+	ticker := time.NewTicker(defaultDiscoveryInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n.discoveryStep(ctx)
+		}
+	}
+}
+
+func (n *Node) discoveryStep(ctx context.Context) {
+	if ctx.Err() != nil || n.PeerCount() >= n.cfg.MaxPeers {
+		return
+	}
+	for _, addr := range n.discoveryCandidates() {
+		addr := addr
+		go func() {
+			if err := n.connectAndHandle(ctx, addr); err != nil && ctx.Err() == nil {
+				n.logf("p2p discovered connect %s failed: %v", addr, err)
+			}
+		}()
+		return
+	}
+}
+
+func (n *Node) discoveryCandidates() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	now := time.Now()
+	self := normalizeAddr(n.cfg.ListenAddr)
+	if n.listener != nil {
+		self = normalizeAddr(n.listener.Addr().String())
+	}
+	candidates := make([]string, 0, len(n.knownAddrs))
+	for addr := range n.knownAddrs {
+		if addr == "" || addr == self {
+			continue
+		}
+		if _, ok := n.peers[addr]; ok {
+			continue
+		}
+		if n.isStaticPeer(addr) {
+			continue
+		}
+		if n.banScores[addr] >= banThreshold {
+			continue
+		}
+		if last, ok := n.recentDials[addr]; ok && now.Sub(last) < defaultDiscoveryRetry {
+			continue
+		}
+		n.recentDials[addr] = now
+		candidates = append(candidates, addr)
+	}
+	return candidates
+}
+
+func (n *Node) isStaticPeer(addr string) bool {
+	for _, peer := range n.cfg.Connect {
+		if normalizeAddr(peer) == addr {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeAddr(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return ""
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	if host == "" || port == "" || port == "0" {
+		return ""
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func (n *Node) hasBlock(hash wire.Hash) bool {
