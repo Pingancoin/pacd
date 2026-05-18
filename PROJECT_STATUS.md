@@ -1,6 +1,6 @@
 # Pingancoin Project Status
 
-Last updated: 2026-05-18
+Last updated: 2026-05-19
 
 ## Repositories
 
@@ -10,7 +10,7 @@ Last updated: 2026-05-18
 | `pacdata` | indexer and read API | usable minimal indexer |
 | `pacexplorer` | block explorer UI | usable minimal explorer |
 | `pacpool` | pool control plane and Stratum | advancing toward payout-ready pool |
-| `pacwallet` | standalone wallet stack | CLI wallet plus service/UI, desktop launcher in progress |
+| `pacwallet` | standalone wallet stack | CLI wallet plus service/UI, desktop launcher with release candidate flow |
 
 ## What Works Now
 
@@ -56,6 +56,7 @@ Last updated: 2026-05-18
 - upstream RPC endpoint profiles with local-first switching
 - desktop release metadata, config templates, and zipped Windows bundle
 - generated branding assets and first-run desktop onboarding polish
+- desktop auto-import of official RPC presets from release templates
 
 ## Current Completion View
 
@@ -109,4 +110,5 @@ Progress inside that line:
 - completed: upstream RPC endpoint profile management
 - completed: desktop release metadata and config-driven Windows bundle
 - completed: generated app icon set, installer/signing scaffolding, and first-run onboarding polish
+- completed: desktop auto-import of official RPC presets from bundled templates
 - next: updater path, certificate-backed signing, and wallet UX hardening
