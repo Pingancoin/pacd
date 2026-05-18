@@ -53,6 +53,7 @@ Last updated: 2026-05-18
 - desktop launcher for Windows-style app windows
 - backup restore flow with archived wallet snapshots
 - Windows release directory build script
+- upstream RPC endpoint profiles with local-first switching
 
 ## Current Completion View
 
@@ -103,4 +104,5 @@ Progress inside that line:
 - completed: desktop launcher skeleton for Windows app-window use
 - completed: backup restore flow with auto-archived wallet snapshots
 - completed: Windows release packaging script and launcher files
+- completed: upstream RPC endpoint profile management
 - next: desktop release polish, updater path, and wallet UX hardening
