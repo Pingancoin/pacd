@@ -51,6 +51,8 @@ Last updated: 2026-05-18
 - local wallet service and JSON API
 - browser UI wallet
 - desktop launcher for Windows-style app windows
+- backup restore flow with archived wallet snapshots
+- Windows release directory build script
 
 ## Current Completion View
 
@@ -99,4 +101,6 @@ Progress inside that line:
 - completed: wallet service layer over local wallet core
 - completed: JSON API and browser wallet UI
 - completed: desktop launcher skeleton for Windows app-window use
-- next: backup / restore polish and packaging flow for desktop release
+- completed: backup restore flow with auto-archived wallet snapshots
+- completed: Windows release packaging script and launcher files
+- next: desktop release polish, updater path, and wallet UX hardening
