@@ -54,6 +54,7 @@ Last updated: 2026-05-18
 - backup restore flow with archived wallet snapshots
 - Windows release directory build script
 - upstream RPC endpoint profiles with local-first switching
+- desktop release metadata, config templates, and zipped Windows bundle
 
 ## Current Completion View
 
@@ -105,4 +106,5 @@ Progress inside that line:
 - completed: backup restore flow with auto-archived wallet snapshots
 - completed: Windows release packaging script and launcher files
 - completed: upstream RPC endpoint profile management
-- next: desktop release polish, updater path, and wallet UX hardening
+- completed: desktop release metadata and config-driven Windows bundle
+- next: updater path, app icon/signing, and wallet UX hardening
