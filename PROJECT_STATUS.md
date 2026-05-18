@@ -10,7 +10,7 @@ Last updated: 2026-05-18
 | `pacdata` | indexer and read API | usable minimal indexer |
 | `pacexplorer` | block explorer UI | usable minimal explorer |
 | `pacpool` | pool control plane and Stratum | advancing toward payout-ready pool |
-| `pacwallet` | standalone CLI wallet | usable developer wallet CLI |
+| `pacwallet` | standalone wallet stack | CLI wallet plus service/UI, desktop launcher in progress |
 
 ## What Works Now
 
@@ -48,6 +48,9 @@ Last updated: 2026-05-18
 - receive address generation
 - balance and history scan
 - signing and sending basic transactions
+- local wallet service and JSON API
+- browser UI wallet
+- desktop launcher for Windows-style app windows
 
 ## Current Completion View
 
@@ -73,8 +76,9 @@ This is the planned build order from here. Unless priorities change, continue in
    - payout execution flow
 3. `pacwallet`: wallet service and UI wallet
    - wallet daemon / RPC
-   - desktop or web UI
-   - backup / restore UX
+   - web UI
+   - Windows desktop launcher
+   - backup / restore UX polish
 4. `pacexplorer`: production polish
    - richer stats
    - better search and labels
@@ -88,13 +92,11 @@ This is the planned build order from here. Unless priorities change, continue in
 
 The currently active line is:
 
-`pacpool` payout groundwork
+`pacwallet` service and desktop wallet
 
 Progress inside that line:
 
-- completed: round archiving model
-- completed: found-block attribution model
-- completed: round share-weight accounting
-- completed: payout calculation preview per round
-- completed: miner balances and payout execution ledger
-- next: miner dashboard API and wallet-linked payout automation
+- completed: wallet service layer over local wallet core
+- completed: JSON API and browser wallet UI
+- completed: desktop launcher skeleton for Windows app-window use
+- next: backup / restore polish and packaging flow for desktop release
