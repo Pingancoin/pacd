@@ -96,4 +96,5 @@ Progress inside that line:
 - completed: found-block attribution model
 - completed: round share-weight accounting
 - completed: payout calculation preview per round
-- next: miner balances and payout execution
+- completed: miner balances and payout execution ledger
+- next: miner dashboard API and wallet-linked payout automation
