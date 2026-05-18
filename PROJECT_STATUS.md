@@ -55,6 +55,7 @@ Last updated: 2026-05-18
 - Windows release directory build script
 - upstream RPC endpoint profiles with local-first switching
 - desktop release metadata, config templates, and zipped Windows bundle
+- generated branding assets and first-run desktop onboarding polish
 
 ## Current Completion View
 
@@ -107,4 +108,5 @@ Progress inside that line:
 - completed: Windows release packaging script and launcher files
 - completed: upstream RPC endpoint profile management
 - completed: desktop release metadata and config-driven Windows bundle
-- next: updater path, app icon/signing, and wallet UX hardening
+- completed: generated app icon set, installer/signing scaffolding, and first-run onboarding polish
+- next: updater path, certificate-backed signing, and wallet UX hardening
