@@ -95,5 +95,5 @@ Progress inside that line:
 - completed: round archiving model
 - completed: found-block attribution model
 - completed: round share-weight accounting
-- next: payout calculation per round
-- after that: miner balances and payout execution
+- completed: payout calculation preview per round
+- next: miner balances and payout execution
