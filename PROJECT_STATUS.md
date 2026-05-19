@@ -57,6 +57,7 @@ Last updated: 2026-05-19
 - desktop release metadata, config templates, and zipped Windows bundle
 - generated branding assets and first-run desktop onboarding polish
 - desktop auto-import of official RPC presets from release templates
+- installer now targets per-user program/config paths with Windows-native build and signing helpers
 
 ## Current Completion View
 
@@ -111,4 +112,5 @@ Progress inside that line:
 - completed: desktop release metadata and config-driven Windows bundle
 - completed: generated app icon set, installer/signing scaffolding, and first-run onboarding polish
 - completed: desktop auto-import of official RPC presets from bundled templates
+- completed: installer path cleanup for per-user Windows installs and release helper bat files
 - next: updater path, certificate-backed signing, and wallet UX hardening
