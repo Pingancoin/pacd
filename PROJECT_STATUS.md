@@ -10,7 +10,7 @@ Last updated: 2026-05-19
 | `pacdata` | indexer and read API | usable minimal indexer |
 | `pacexplorer` | block explorer UI | production polish in progress |
 | `pacpool` | pool control plane and Stratum | advancing toward payout-ready pool |
-| `pacwallet` | standalone wallet stack | CLI wallet plus service/UI, desktop launcher with release candidate flow |
+| `pacwallet` | standalone wallet stack | fuller Bitcoin-style desktop wallet with service/UI and Windows release candidate flow |
 
 ## What Works Now
 
@@ -58,6 +58,8 @@ Last updated: 2026-05-19
 - local wallet service and JSON API
 - browser UI wallet
 - desktop launcher for Windows-style app windows
+- desktop dashboard with summary, node health, send/receive, UTXO table, history table, multisig preview, encryption, and backup controls
+- public key export and 3-of-5 multisig preview flow
 - backup restore flow with archived wallet snapshots
 - Windows release directory build script
 - upstream RPC endpoint profiles with local-first switching
@@ -72,7 +74,7 @@ Last updated: 2026-05-19
 - `pacdata`: roughly 70%
 - `pacexplorer`: roughly 65%
 - `pacpool`: roughly 65%
-- `pacwallet`: roughly 45%
+- `pacwallet`: roughly 65%
 - full production-ready stack: roughly 55%
 
 ## Ordered Next Steps
@@ -88,11 +90,11 @@ This is the planned build order from here. Unless priorities change, continue in
    - miner balances
    - payment records
    - payout execution flow
-3. `pacwallet`: wallet service and UI wallet
-   - wallet daemon / RPC
-   - web UI
-   - Windows desktop launcher
-   - backup / restore UX polish
+3. `pacwallet`: desktop wallet hardening
+   - richer transaction details
+   - QR receive flow
+   - multi-step multisig coordination and signing
+   - final desktop distribution polish
 4. `pacexplorer`: production polish
    - richer stats
    - better search and labels
@@ -106,11 +108,11 @@ This is the planned build order from here. Unless priorities change, continue in
 
 The currently active line is:
 
-`pac` mainnet hardening
+`pacwallet` desktop wallet completion
 
 Progress inside that line:
 
-- completed: mainnet launch-check command with placeholder multisig blocking
-- completed: first `systemd` deployment template and env file
-- completed: release-blocking `scripts/mainnet-release-check.sh`
-- next: freeze the final mainnet 3-of-5 payout script, then add release artifacts and monitoring guidance
+- completed: wallet service, JSON API, and Windows desktop launcher
+- completed: first-run onboarding and upstream profile flow
+- completed: desktop dashboard with send/receive, UTXO/history, backup, encryption, and multisig preview
+- next: QR receive flow, richer transaction drill-down, and multisig signing workflow
