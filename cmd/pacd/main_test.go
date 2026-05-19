@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"io"
+	"os"
 	"testing"
 	"time"
 
@@ -48,4 +51,73 @@ func TestMiningStartTime(t *testing.T) {
 	if _, err := miningStartTime(chain, genesisTime.Format(time.RFC3339)); err == nil {
 		t.Fatal("expected error for start time at genesis")
 	}
+}
+
+func TestBuildLaunchCheckReportMainnetPlaceholder(t *testing.T) {
+	report := buildLaunchCheckReport(chaincfg.MainNetParams())
+	if report.Ready {
+		t.Fatal("mainnet report should not be ready with placeholder payout script")
+	}
+	if report.ProjectPayoutScriptFrozen {
+		t.Fatal("placeholder payout script reported as frozen")
+	}
+	if len(report.BlockingIssues) == 0 {
+		t.Fatal("expected blocking issues")
+	}
+}
+
+func TestBuildLaunchCheckReportFrozenConfig(t *testing.T) {
+	params := chaincfg.MainNetParams()
+	params.ProjectPayoutScript = []byte{0xa9, 0x14, 0x01, 0x87}
+
+	report := buildLaunchCheckReport(params)
+	if !report.Ready {
+		t.Fatalf("report not ready: %+v", report)
+	}
+	if !report.ProjectPayoutScriptFrozen {
+		t.Fatal("frozen payout script not detected")
+	}
+}
+
+func TestBuildLaunchCheckReportSimnet(t *testing.T) {
+	report := buildLaunchCheckReport(chaincfg.SimNetParams())
+	if !report.Ready {
+		t.Fatalf("simnet report not ready: %+v", report)
+	}
+}
+
+func TestPrintLaunchCheckJSON(t *testing.T) {
+	report := launchCheckReport{
+		Network: "mainnet",
+		Ready:   true,
+	}
+	var buf bytes.Buffer
+	stdout := captureStdout(t, &buf, func() error {
+		return printLaunchCheckJSON(report)
+	})
+	if stdout != nil {
+		t.Fatal(stdout)
+	}
+	if got := buf.String(); got == "" || got[0] != '{' {
+		t.Fatalf("json output = %q", got)
+	}
+}
+
+func captureStdout(t *testing.T, target io.Writer, fn func() error) error {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	runErr := fn()
+	_ = w.Close()
+	os.Stdout = old
+	_, copyErr := io.Copy(target, r)
+	_ = r.Close()
+	if copyErr != nil {
+		t.Fatal(copyErr)
+	}
+	return runErr
 }

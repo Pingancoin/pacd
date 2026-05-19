@@ -82,6 +82,13 @@ go run ./cmd/pacd address validate-project --redeemscript <redeem-script-hex>
 Mainnet launch requires replacing the placeholder project payout script with
 the final 3-of-5 multisig script generated from the project's five public keys.
 
+Check whether the current mainnet constants are actually launch-ready:
+
+```bash
+go run ./cmd/pacd launch-check --network mainnet
+go run ./cmd/pacd launch-check --network mainnet --json
+```
+
 ## Wallet
 
 `pacwallet` can create encrypted local wallets, generate receiving addresses,
@@ -142,6 +149,30 @@ payload checksums, version/verack handshake, ping/pong, connection limits, peer
 tracking, header-first synchronization, block requests, block validation, and
 block persistence. Future P2P layers should add inventory relay, peer address
 gossip, ban scores, orphan handling, and parallel block download.
+
+## Mainnet Deployment
+
+The first deployment templates now live under:
+
+```text
+deploy/
+  README.md
+  pacd-mainnet.env.example
+  systemd/pacd-mainnet.service
+scripts/
+  mainnet-release-check.sh
+```
+
+Useful commands:
+
+```bash
+go run ./cmd/pacd launch-check --network mainnet
+./scripts/mainnet-release-check.sh
+```
+
+`launch-check` is expected to fail until the placeholder mainnet project payout
+script is replaced with the final 3-of-5 multisig output script. That failure
+is intentional and acts as a release blocker.
 
 ## Supply Note
 

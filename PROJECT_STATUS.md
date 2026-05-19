@@ -6,7 +6,7 @@ Last updated: 2026-05-19
 
 | Repo | Purpose | Current state |
 | --- | --- | --- |
-| `pac` | chain core, node, P2P, mining RPC | usable developer chain core |
+| `pac` | chain core, node, P2P, mining RPC | mainnet hardening in progress |
 | `pacdata` | indexer and read API | usable minimal indexer |
 | `pacexplorer` | block explorer UI | production polish in progress |
 | `pacpool` | pool control plane and Stratum | advancing toward payout-ready pool |
@@ -21,6 +21,9 @@ Last updated: 2026-05-19
 - mempool
 - `getblocktemplate` / `submitblock`
 - simnet mining and multi-node sync
+- mainnet launch-check command
+- first systemd deployment template
+- release-blocking mainnet preflight script
 
 ### `pacdata`
 - chain indexing from `pacd`
@@ -103,13 +106,11 @@ This is the planned build order from here. Unless priorities change, continue in
 
 The currently active line is:
 
-`pacexplorer` production polish
+`pac` mainnet hardening
 
 Progress inside that line:
 
-- completed: paginated home and address views
-- completed: optional address labels on home, tx, and address pages
-- completed: label-aware search
-- completed: short-TTL in-memory caching for pacdata-backed reads
-- completed: real `/healthz` probing against pacdata
-- next: richer recent activity views, deployment headers, and mainnet launch hardening in `pac`
+- completed: mainnet launch-check command with placeholder multisig blocking
+- completed: first `systemd` deployment template and env file
+- completed: release-blocking `scripts/mainnet-release-check.sh`
+- next: freeze the final mainnet 3-of-5 payout script, then add release artifacts and monitoring guidance

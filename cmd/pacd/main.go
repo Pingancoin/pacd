@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -29,6 +30,12 @@ import (
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "address" {
 		if err := runAddressCommand(os.Args[2:]); err != nil {
+			exit(err)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "launch-check" {
+		if err := runLaunchCheckCommand(os.Args[2:]); err != nil {
 			exit(err)
 		}
 		return
@@ -138,6 +145,47 @@ func runAddressCommand(args []string) error {
 	default:
 		return fmt.Errorf("unknown address subcommand %q", args[0])
 	}
+}
+
+type launchCheckReport struct {
+	Network                   string   `json:"network"`
+	Ready                     bool     `json:"ready"`
+	AddressPrefix             string   `json:"address_prefix"`
+	DefaultPort               string   `json:"default_port"`
+	TargetTimePerBlock        string   `json:"target_time_per_block"`
+	ASERTHalfLife             string   `json:"asert_half_life"`
+	BaseSubsidy               string   `json:"base_subsidy"`
+	ReductionInterval         int64    `json:"reduction_interval"`
+	CoinbaseMaturity          uint32   `json:"coinbase_maturity"`
+	MinerRewardPercent        int64    `json:"miner_reward_percent"`
+	ProjectRewardPercent      int64    `json:"project_reward_percent"`
+	ProjectMultisig           string   `json:"project_multisig"`
+	ProjectPayoutScriptFrozen bool     `json:"project_payout_script_frozen"`
+	DNSSeeds                  []string `json:"dns_seeds"`
+	Warnings                  []string `json:"warnings,omitempty"`
+	BlockingIssues            []string `json:"blocking_issues,omitempty"`
+}
+
+func runLaunchCheckCommand(args []string) error {
+	flags := flag.NewFlagSet("pacd launch-check", flag.ContinueOnError)
+	network := flags.String("network", "mainnet", "network to use: mainnet, testnet, simnet")
+	jsonOut := flags.Bool("json", false, "print launch check report as JSON")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	params, err := selectParams(*network)
+	if err != nil {
+		return err
+	}
+	report := buildLaunchCheckReport(params)
+	if *jsonOut {
+		return printLaunchCheckJSON(report)
+	}
+	printLaunchCheck(report)
+	if !report.Ready {
+		return fmt.Errorf("%s launch-check found %d blocking issue(s)", params.Name, len(report.BlockingIssues))
+	}
+	return nil
 }
 
 func runPubKeyAddressCommand(args []string) error {
@@ -298,9 +346,145 @@ func printConsensusParams(params *chaincfg.Params) {
 	fmt.Printf("coinbase maturity: %d block(s)\n", params.CoinbaseMaturity)
 	fmt.Printf("coinbase split: %d%% miner / %d%% project\n", params.MinerRewardPercent, params.ProjectRewardPercent)
 	fmt.Printf("project multisig: %d-of-%d\n", params.ProjectMultisigM, params.ProjectMultisigN)
+	if params.Name == "mainnet" {
+		if chaincfg.MainNetProjectPayoutIsPlaceholder(params) {
+			fmt.Println("project payout script: placeholder (replace before launch)")
+		} else {
+			fmt.Println("project payout script: frozen")
+		}
+	}
 	if len(params.DNSSeeds) > 0 {
 		fmt.Printf("dns seeds: %s\n", strings.Join(params.DNSSeeds, ","))
 	}
+}
+
+func buildLaunchCheckReport(params *chaincfg.Params) launchCheckReport {
+	report := launchCheckReport{
+		Network:                   params.Name,
+		Ready:                     true,
+		AddressPrefix:             params.AddressPrefix,
+		DefaultPort:               params.DefaultPort,
+		TargetTimePerBlock:        params.TargetTimePerBlock.String(),
+		ASERTHalfLife:             params.ASERTHalfLife.String(),
+		BaseSubsidy:               formatPAC(params.BaseSubsidy),
+		ReductionInterval:         params.ReductionInterval,
+		CoinbaseMaturity:          params.CoinbaseMaturity,
+		MinerRewardPercent:        params.MinerRewardPercent,
+		ProjectRewardPercent:      params.ProjectRewardPercent,
+		ProjectMultisig:           fmt.Sprintf("%d-of-%d", params.ProjectMultisigM, params.ProjectMultisigN),
+		ProjectPayoutScriptFrozen: !chaincfg.MainNetProjectPayoutIsPlaceholder(params),
+		DNSSeeds:                  append([]string(nil), params.DNSSeeds...),
+	}
+
+	addWarning := func(msg string) {
+		report.Warnings = append(report.Warnings, msg)
+	}
+	addBlocking := func(msg string) {
+		report.Ready = false
+		report.BlockingIssues = append(report.BlockingIssues, msg)
+	}
+
+	if params.AddressPrefix == "" {
+		addBlocking("address prefix is empty")
+	}
+	if params.Name == "mainnet" && params.AddressPrefix != "P" {
+		addBlocking(fmt.Sprintf("address prefix is %q, expected \"P\"", params.AddressPrefix))
+	}
+	if params.TargetTimePerBlock != 150*time.Second {
+		addBlocking(fmt.Sprintf("target time per block is %s, expected 2m30s", params.TargetTimePerBlock))
+	}
+	if params.Name == "mainnet" && params.ASERTHalfLife != 2*time.Hour {
+		addBlocking(fmt.Sprintf("ASERT half life is %s, expected 2h0m0s", params.ASERTHalfLife))
+	}
+	if params.MinerRewardPercent != 95 || params.ProjectRewardPercent != 5 {
+		addBlocking(fmt.Sprintf("coinbase split is %d/%d, expected 95/5", params.MinerRewardPercent, params.ProjectRewardPercent))
+	}
+	if params.ProjectMultisigM != 3 || params.ProjectMultisigN != 5 {
+		addBlocking(fmt.Sprintf("project multisig is %d-of-%d, expected 3-of-5", params.ProjectMultisigM, params.ProjectMultisigN))
+	}
+	if params.ReductionInterval != 12_288 {
+		addBlocking(fmt.Sprintf("reduction interval is %d, expected 12288", params.ReductionInterval))
+	}
+	if params.Name == "mainnet" && len(params.DNSSeeds) < 3 {
+		addBlocking(fmt.Sprintf("dns seeds count is %d, expected at least 3", len(params.DNSSeeds)))
+	}
+	if params.Name == "mainnet" && chaincfg.MainNetProjectPayoutIsPlaceholder(params) {
+		addBlocking("mainnet project payout script is still placeholder")
+	}
+	if params.Name == "mainnet" {
+		wantSeeds := []string{
+			"server1.pingancoin.org",
+			"server2.pingancoin.org",
+			"server3.pingancoin.org",
+			"server4.pingancoin.org",
+		}
+		for _, seed := range wantSeeds {
+			if !containsString(params.DNSSeeds, seed) {
+				addWarning(fmt.Sprintf("dns seed %s is not configured", seed))
+			}
+		}
+	}
+	if params.DefaultPort == "" {
+		addBlocking("default P2P port is empty")
+	}
+	if params.CoinbaseMaturity < 100 && params.Name != "simnet" {
+		addWarning(fmt.Sprintf("coinbase maturity is %d; mainnet launch usually expects 100", params.CoinbaseMaturity))
+	}
+	return report
+}
+
+func printLaunchCheck(report launchCheckReport) {
+	fmt.Printf("launch-check network=%s ready=%t\n", report.Network, report.Ready)
+	fmt.Printf("address prefix: %s...\n", report.AddressPrefix)
+	fmt.Printf("default port: %s\n", report.DefaultPort)
+	fmt.Printf("target block time: %s\n", report.TargetTimePerBlock)
+	fmt.Printf("asert half life: %s\n", report.ASERTHalfLife)
+	fmt.Printf("base subsidy: %s PAC\n", report.BaseSubsidy)
+	fmt.Printf("reduction interval: %d\n", report.ReductionInterval)
+	fmt.Printf("coinbase maturity: %d\n", report.CoinbaseMaturity)
+	fmt.Printf("coinbase split: %d%% miner / %d%% project\n", report.MinerRewardPercent, report.ProjectRewardPercent)
+	fmt.Printf("project multisig: %s\n", report.ProjectMultisig)
+	if report.ProjectPayoutScriptFrozen {
+		fmt.Println("project payout script: frozen")
+	} else {
+		fmt.Println("project payout script: placeholder")
+	}
+	if len(report.DNSSeeds) > 0 {
+		fmt.Printf("dns seeds: %s\n", strings.Join(report.DNSSeeds, ","))
+	}
+	if len(report.Warnings) > 0 {
+		fmt.Println("warnings:")
+		for _, item := range report.Warnings {
+			fmt.Printf("  - %s\n", item)
+		}
+	}
+	if len(report.BlockingIssues) > 0 {
+		fmt.Println("blocking issues:")
+		for _, item := range report.BlockingIssues {
+			fmt.Printf("  - %s\n", item)
+		}
+	}
+}
+
+func printLaunchCheckJSON(report launchCheckReport) error {
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(data))
+	if !report.Ready {
+		return fmt.Errorf("%s launch-check found %d blocking issue(s)", report.Network, len(report.BlockingIssues))
+	}
+	return nil
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func defaultDataDir() string {
