@@ -10,7 +10,7 @@ Last updated: 2026-05-19
 | `pacdata` | indexer and read API | usable minimal indexer |
 | `pacexplorer` | block explorer UI | production polish in progress |
 | `pacpool` | pool control plane and Stratum | advancing toward payout-ready pool |
-| `pacwallet` | standalone wallet stack | Bitcoin-style desktop wallet V1 candidate with service/UI and Windows release flow |
+| `pacwallet` | standalone wallet stack | Go wallet backend plus native Qt desktop wallet direction |
 
 ## What Works Now
 
@@ -65,6 +65,12 @@ Last updated: 2026-05-19
 - public key export and 3-of-5 multisig preview flow
 - backup restore flow with archived wallet snapshots
 - Windows release directory build script
+- native `C++/Qt` desktop wallet scaffold under `pacwallet/qt`
+- Qt 6 toolchain installed and native client compiling on macOS
+- native welcome/setup flow with create and restore
+- native settings view now wires wallet security, upstream switching, private-key import, backups, and local service control
+- native overview now shows wallet state plus UTXO inventory
+- native transaction view now supports filtering, search, and detail drill-down
 - upstream RPC endpoint profiles with local-first switching
 - desktop release metadata, config templates, and zipped Windows bundle
 - generated branding assets and first-run desktop onboarding polish
@@ -77,7 +83,7 @@ Last updated: 2026-05-19
 - `pacdata`: roughly 70%
 - `pacexplorer`: roughly 65%
 - `pacpool`: roughly 65%
-- `pacwallet`: roughly 78%
+- `pacwallet`: roughly 80%
 - full production-ready stack: roughly 55%
 
 ## Ordered Next Steps
@@ -93,10 +99,10 @@ This is the planned build order from here. Unless priorities change, continue in
    - miner balances
    - payment records
    - payout execution flow
-3. `pacwallet`: desktop wallet final polish
-   - multi-step multisig coordination and signing
-   - optional QR amount presets and payment request flow
-   - final desktop distribution polish
+3. `pacwallet`: native Qt desktop wallet
+   - complete overview / receive / send / transactions / multisig / settings views
+   - connect to `pacwallet serve`
+   - replace browser-hosted desktop shell with native Qt UI
 4. `pacexplorer`: production polish
    - richer stats
    - better search and labels
@@ -110,12 +116,13 @@ This is the planned build order from here. Unless priorities change, continue in
 
 The currently active line is:
 
-`pacwallet` V1 completion and release packaging
+`pacwallet` native Qt desktop wallet
 
 Progress inside that line:
 
-- completed: wallet service, JSON API, and Windows desktop launcher
-- completed: first-run onboarding and upstream profile flow
-- completed: desktop dashboard with send/receive, UTXO/history, backup, encryption, multisig preview, and pubkey export
-- completed: receive QR flow and transaction detail pages
-- next: final smoke pass, Windows package rebuild, and single V1 candidate release
+- completed: Go wallet backend and JSON API
+- completed: browser-hosted desktop candidate and Windows packaging path
+- completed: native Qt project scaffold with API client, service controller, and core wallet pages
+- completed: Qt 6 toolchain install and first successful native app build
+- completed: first-run welcome flow plus connected native settings / overview / transactions improvements
+- next: keep filling in native wallet ergonomics until the Qt client can replace the browser-hosted desktop flow for everyday use
