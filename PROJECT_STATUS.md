@@ -10,7 +10,7 @@ Last updated: 2026-05-19
 | `pacdata` | indexer and read API | usable minimal indexer |
 | `pacexplorer` | block explorer UI | production polish in progress |
 | `pacpool` | pool control plane and Stratum | advancing toward payout-ready pool |
-| `pacwallet` | standalone wallet stack | fuller Bitcoin-style desktop wallet with service/UI and Windows release candidate flow |
+| `pacwallet` | standalone wallet stack | Bitcoin-style desktop wallet V1 candidate with service/UI and Windows release flow |
 
 ## What Works Now
 
@@ -59,6 +59,9 @@ Last updated: 2026-05-19
 - browser UI wallet
 - desktop launcher for Windows-style app windows
 - desktop dashboard with summary, node health, send/receive, UTXO table, history table, multisig preview, encryption, and backup controls
+- receive QR rendering
+- transaction detail drill-down pages
+- history filters and txid/address search
 - public key export and 3-of-5 multisig preview flow
 - backup restore flow with archived wallet snapshots
 - Windows release directory build script
@@ -74,7 +77,7 @@ Last updated: 2026-05-19
 - `pacdata`: roughly 70%
 - `pacexplorer`: roughly 65%
 - `pacpool`: roughly 65%
-- `pacwallet`: roughly 65%
+- `pacwallet`: roughly 78%
 - full production-ready stack: roughly 55%
 
 ## Ordered Next Steps
@@ -90,10 +93,9 @@ This is the planned build order from here. Unless priorities change, continue in
    - miner balances
    - payment records
    - payout execution flow
-3. `pacwallet`: desktop wallet hardening
-   - richer transaction details
-   - QR receive flow
+3. `pacwallet`: desktop wallet final polish
    - multi-step multisig coordination and signing
+   - optional QR amount presets and payment request flow
    - final desktop distribution polish
 4. `pacexplorer`: production polish
    - richer stats
@@ -108,11 +110,12 @@ This is the planned build order from here. Unless priorities change, continue in
 
 The currently active line is:
 
-`pacwallet` desktop wallet completion
+`pacwallet` V1 completion and release packaging
 
 Progress inside that line:
 
 - completed: wallet service, JSON API, and Windows desktop launcher
 - completed: first-run onboarding and upstream profile flow
-- completed: desktop dashboard with send/receive, UTXO/history, backup, encryption, and multisig preview
-- next: QR receive flow, richer transaction drill-down, and multisig signing workflow
+- completed: desktop dashboard with send/receive, UTXO/history, backup, encryption, multisig preview, and pubkey export
+- completed: receive QR flow and transaction detail pages
+- next: final smoke pass, Windows package rebuild, and single V1 candidate release
