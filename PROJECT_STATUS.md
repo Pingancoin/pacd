@@ -68,6 +68,7 @@ Last updated: 2026-05-19
 - native `C++/Qt` desktop wallet scaffold under `pacwallet/qt`
 - Qt 6 toolchain installed and native client compiling on macOS
 - native macOS `.app` bundle build path plus release script
+- native Windows Qt toolchain bootstrap and release script
 - native welcome/setup flow with create and restore
 - native settings view now wires wallet security, upstream switching, private-key import, backups, and local service control
 - native overview now shows wallet state plus UTXO inventory
@@ -75,6 +76,7 @@ Last updated: 2026-05-19
 - native receive page now supports copy helpers and QR export
 - native send page now supports spendable balance display, change-address selection, max helper, and confirm-before-send
 - native multisig page now supports local export plus preview/result export
+- native Windows Qt release candidate built on a remote Windows machine with MSVC + `windeployqt`
 - upstream RPC endpoint profiles with local-first switching
 - desktop release metadata, config templates, and zipped Windows bundle
 - generated branding assets and first-run desktop onboarding polish
@@ -130,4 +132,5 @@ Progress inside that line:
 - completed: Qt 6 toolchain install and first successful native app build
 - completed: first-run welcome flow plus connected native settings / overview / transactions improvements
 - completed: native receive/send/multisig ergonomics and macOS bundle release path
+- completed: Windows Qt toolchain bootstrap and first native Windows release candidate build
 - next: keep driving the Qt client until it fully replaces the browser-hosted desktop flow for everyday wallet use
