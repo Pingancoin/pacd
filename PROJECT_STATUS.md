@@ -8,7 +8,7 @@ Last updated: 2026-05-19
 | --- | --- | --- |
 | `pac` | chain core, node, P2P, mining RPC | usable developer chain core |
 | `pacdata` | indexer and read API | usable minimal indexer |
-| `pacexplorer` | block explorer UI | usable minimal explorer |
+| `pacexplorer` | block explorer UI | production polish in progress |
 | `pacpool` | pool control plane and Stratum | advancing toward payout-ready pool |
 | `pacwallet` | standalone wallet stack | CLI wallet plus service/UI, desktop launcher with release candidate flow |
 
@@ -34,6 +34,10 @@ Last updated: 2026-05-19
 - tx page
 - address page
 - paging wired to `pacdata`
+- optional address labels
+- label-based search
+- short-TTL in-memory caching
+- real upstream health check endpoint
 
 ### `pacpool`
 - Stratum subscribe / authorize / notify / submit
@@ -99,18 +103,13 @@ This is the planned build order from here. Unless priorities change, continue in
 
 The currently active line is:
 
-`pacwallet` service and desktop wallet
+`pacexplorer` production polish
 
 Progress inside that line:
 
-- completed: wallet service layer over local wallet core
-- completed: JSON API and browser wallet UI
-- completed: desktop launcher skeleton for Windows app-window use
-- completed: backup restore flow with auto-archived wallet snapshots
-- completed: Windows release packaging script and launcher files
-- completed: upstream RPC endpoint profile management
-- completed: desktop release metadata and config-driven Windows bundle
-- completed: generated app icon set, installer/signing scaffolding, and first-run onboarding polish
-- completed: desktop auto-import of official RPC presets from bundled templates
-- completed: installer path cleanup for per-user Windows installs and release helper bat files
-- next: updater path, certificate-backed signing, and wallet UX hardening
+- completed: paginated home and address views
+- completed: optional address labels on home, tx, and address pages
+- completed: label-aware search
+- completed: short-TTL in-memory caching for pacdata-backed reads
+- completed: real `/healthz` probing against pacdata
+- next: richer recent activity views, deployment headers, and mainnet launch hardening in `pac`
