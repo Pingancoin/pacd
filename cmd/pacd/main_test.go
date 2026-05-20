@@ -53,16 +53,29 @@ func TestMiningStartTime(t *testing.T) {
 	}
 }
 
-func TestBuildLaunchCheckReportMainnetPlaceholder(t *testing.T) {
+func TestBuildLaunchCheckReportMainnetFrozen(t *testing.T) {
 	report := buildLaunchCheckReport(chaincfg.MainNetParams())
+	if !report.Ready {
+		t.Fatalf("mainnet report not ready: %+v", report)
+	}
+	if !report.ProjectPayoutScriptFrozen {
+		t.Fatal("mainnet payout script not reported as frozen")
+	}
+	if len(report.BlockingIssues) != 0 {
+		t.Fatalf("unexpected blocking issues: %v", report.BlockingIssues)
+	}
+}
+
+func TestBuildLaunchCheckReportMainnetPlaceholder(t *testing.T) {
+	params := chaincfg.MainNetParams()
+	params.ProjectPayoutScript = []byte(chaincfg.PlaceholderProjectPayoutScript)
+
+	report := buildLaunchCheckReport(params)
 	if report.Ready {
-		t.Fatal("mainnet report should not be ready with placeholder payout script")
+		t.Fatal("placeholder report should not be ready")
 	}
 	if report.ProjectPayoutScriptFrozen {
 		t.Fatal("placeholder payout script reported as frozen")
-	}
-	if len(report.BlockingIssues) == 0 {
-		t.Fatal("expected blocking issues")
 	}
 }
 
