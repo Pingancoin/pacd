@@ -1,6 +1,6 @@
 # Pingancoin Project Status
 
-Last updated: 2026-05-19
+Last updated: 2026-05-20
 
 ## Repositories
 
@@ -13,6 +13,14 @@ Last updated: 2026-05-19
 | `pacwallet` | standalone wallet stack | Go wallet backend plus native Qt desktop wallet direction |
 
 ## What Works Now
+
+## Current Live Nodes
+
+| Host | Role | Public P2P | RPC | Status |
+| --- | --- | --- | --- | --- |
+| `115.190.57.12` | public node / wallet RPC upstream | `443/tcp` | public via `/rpc` | running |
+| `180.184.43.187` | public node / backup RPC upstream | `443/tcp` | public via `/rpc` | running |
+| `zsses.com` | high-performance public full node | `19443/tcp` | local only on `127.0.0.1:9509` | running, connected to both public nodes |
 
 ### `pac`
 - Pure PoW BLAKE-256 chain rules
