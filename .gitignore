@@ -4,3 +4,4 @@ dist/
 coverage.out
 *.test
 *.log
+PROJECT_STATUS.md
