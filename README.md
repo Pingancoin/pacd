@@ -39,12 +39,6 @@ apply in their own jurisdiction. Users act at their own risk.
 | Genesis time | 2026-06-01 00:00:00 UTC |
 | Genesis message | `Pingancoin PAC genesis: pure PoW, no premine, BLAKE-256 r14, 2026-06-01` |
 
-## Pure PoW Boundary
-
-PAC deliberately removes Decred's hybrid PoW/PoS path. The minimal chain core
-does not define ticket purchases, votes, stake validation, stake difficulty,
-stakebase transactions, treasury voting, or agenda voting.
-
 ## Layout
 
 ```text
