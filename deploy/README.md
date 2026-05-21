@@ -57,6 +57,7 @@ sudo chown -R pacd:pacd /var/lib/pacd
 3. Copy:
    - [systemd/pacd-mainnet.service](/Users/fanye/Documents/pac/deploy/systemd/pacd-mainnet.service)
    - [pacd-mainnet.env.example](/Users/fanye/Documents/pac/deploy/pacd-mainnet.env.example)
+   - optional reverse proxy template: [nginx/pacd-rpc.conf.example](/Users/fanye/Documents/pac/deploy/nginx/pacd-rpc.conf.example)
 
 4. Adjust `/etc/pingancoin/pacd-mainnet.env`
    - leave `PACD_RPC_LISTEN=127.0.0.1:9509` for normal deployments
@@ -91,4 +92,5 @@ sudo systemctl status pacd-mainnet
 
 - `launch-check` is intentionally strict about frozen mainnet consensus values
 - `systemd` template uses a per-service data directory and local-only RPC by default
+- nginx template shows a token-injecting `/rpc/` proxy for wallet/explorer use
 - add reverse proxy, metrics, and log shipping separately; this directory is the first deployment baseline, not the final ops stack

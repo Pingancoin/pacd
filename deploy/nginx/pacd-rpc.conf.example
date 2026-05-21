@@ -1,0 +1,22 @@
+# Example nginx location for a public wallet/explorer RPC endpoint.
+#
+# Keep pacd itself bound to 127.0.0.1:9509 and set PACD_RPC_TOKEN in
+# /etc/pingancoin/pacd-mainnet.env. nginx injects the internal bearer token
+# before proxying to pacd, so public clients do not need to know the token.
+
+location /rpc/ {
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Authorization "Bearer REPLACE_WITH_PACD_RPC_TOKEN";
+
+    proxy_connect_timeout 5s;
+    proxy_send_timeout 30s;
+    proxy_read_timeout 30s;
+
+    client_max_body_size 8m;
+    rewrite ^/rpc/?(.*)$ /$1 break;
+    proxy_pass http://127.0.0.1:9509;
+}

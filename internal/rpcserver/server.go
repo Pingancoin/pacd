@@ -187,6 +187,10 @@ func (s *Server) ListenAndServe(ctx context.Context, listen string) error {
 		Addr:              listen,
 		Handler:           s.mux,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 * 1024,
 	}
 	errCh := make(chan error, 1)
 	go func() {
