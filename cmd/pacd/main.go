@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -52,6 +53,8 @@ func main() {
 	reset := flag.Bool("reset", false, "delete existing simnet block data before starting")
 	rpc := flag.Bool("rpc", false, "start the local read-only HTTP RPC server")
 	rpcListen := flag.String("rpclisten", "127.0.0.1:9509", "HTTP RPC listen address")
+	rpcToken := flag.String("rpctoken", "", "optional bearer token required for every HTTP RPC request")
+	allowPublicRPC := flag.Bool("allowpublicrpc", false, "allow mainnet RPC on a non-loopback interface without --rpctoken")
 	p2pEnabled := flag.Bool("p2p", false, "start the P2P listener and peer manager")
 	p2pListen := flag.String("listen", "", "P2P listen address; defaults to 127.0.0.1:<network default port> when --p2p is set")
 	maxPeers := flag.Int("maxpeers", 32, "maximum P2P peers")
@@ -85,7 +88,10 @@ func main() {
 		}
 		printMiningSummary(chain, store)
 		if *rpc || *p2pEnabled {
-			runServices(chain, store, *rpc, *rpcListen, *p2pEnabled, *p2pListen, connectPeers, *maxPeers)
+			if err := validateRPCExposure(params, *rpc, *rpcListen, *rpcToken, *allowPublicRPC); err != nil {
+				exit(err)
+			}
+			runServices(chain, store, *rpc, *rpcListen, *rpcToken, *p2pEnabled, *p2pListen, connectPeers, *maxPeers)
 		}
 		return
 	}
@@ -115,10 +121,13 @@ func main() {
 		if err != nil {
 			exit(err)
 		}
-		if err := chain.AddBlock(block); err != nil {
+		if err := chain.ValidateBlock(block); err != nil {
 			exit(err)
 		}
 		if err := store.Append(block); err != nil {
+			exit(err)
+		}
+		if err := chain.AddBlock(block); err != nil {
 			exit(err)
 		}
 		if !*quiet {
@@ -127,7 +136,10 @@ func main() {
 	}
 	printMiningSummary(chain, store)
 	if *rpc || *p2pEnabled {
-		runServices(chain, store, *rpc, *rpcListen, *p2pEnabled, *p2pListen, connectPeers, *maxPeers)
+		if err := validateRPCExposure(params, *rpc, *rpcListen, *rpcToken, *allowPublicRPC); err != nil {
+			exit(err)
+		}
+		runServices(chain, store, *rpc, *rpcListen, *rpcToken, *p2pEnabled, *p2pListen, connectPeers, *maxPeers)
 	}
 }
 
@@ -559,7 +571,7 @@ func printMiningSummary(chain *blockchain.Chain, store *blockstore.Store) {
 	)
 }
 
-func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bool, rpcListen string, p2pEnabled bool, p2pListen string, connectPeers []string, maxPeers int) {
+func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bool, rpcListen string, rpcToken string, p2pEnabled bool, p2pListen string, connectPeers []string, maxPeers int) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -601,7 +613,7 @@ func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bo
 		}
 	}
 	if rpcEnabled {
-		server = rpcserver.NewWithLock(chain, store, chainMu)
+		server = rpcserver.NewWithOptions(chain, store, chainMu, rpcserver.Options{AuthToken: rpcToken})
 		if node != nil {
 			server.SetBlockConnectedCallback(node.RelayBlock)
 			server.SetTransactionAcceptedCallback(node.RelayTransaction)
@@ -612,6 +624,9 @@ func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bo
 	}
 	if rpcEnabled {
 		fmt.Printf("rpc listening on http://%s\n", rpcListen)
+		if strings.TrimSpace(rpcToken) != "" {
+			fmt.Println("rpc auth: bearer token required")
+		}
 		go func() {
 			errCh <- server.ListenAndServe(ctx, rpcListen)
 		}()
@@ -630,6 +645,35 @@ func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bo
 			exit(err)
 		}
 	}
+}
+
+func validateRPCExposure(params *chaincfg.Params, rpcEnabled bool, rpcListen string, rpcToken string, allowPublic bool) error {
+	if !rpcEnabled || params.Name != "mainnet" || strings.TrimSpace(rpcToken) != "" || allowPublic {
+		return nil
+	}
+	if rpcListenIsLoopback(rpcListen) {
+		return nil
+	}
+	return fmt.Errorf("refusing unauthenticated mainnet RPC on non-loopback listen address %q; set --rpctoken or --allowpublicrpc", rpcListen)
+}
+
+func rpcListenIsLoopback(listen string) bool {
+	host := strings.TrimSpace(listen)
+	if strings.HasPrefix(host, ":") {
+		return false
+	}
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		host = parsedHost
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip != nil {
+		return ip.IsLoopback()
+	}
+	return strings.EqualFold(host, "localhost")
 }
 
 func seedPeers(params *chaincfg.Params) []string {

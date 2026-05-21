@@ -3,6 +3,7 @@ package rpcserver
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -29,12 +30,17 @@ type Server struct {
 	store            *blockstore.Store
 	mux              *http.ServeMux
 	mu               *sync.Mutex
+	authToken        string
 	mempool          []*wire.MsgTx
 	onBlockConnected func(*wire.MsgBlock)
 	onTxAccepted     func(*wire.MsgTx)
 	peerInfo         func() []PeerSnapshot
 	peerCount        func() int
 	knownAddrCount   func() int
+}
+
+type Options struct {
+	AuthToken string
 }
 
 type PeerSnapshot struct {
@@ -50,14 +56,19 @@ func New(chain *blockchain.Chain, store *blockstore.Store) *Server {
 }
 
 func NewWithLock(chain *blockchain.Chain, store *blockstore.Store, mu *sync.Mutex) *Server {
+	return NewWithOptions(chain, store, mu, Options{})
+}
+
+func NewWithOptions(chain *blockchain.Chain, store *blockstore.Store, mu *sync.Mutex, opts Options) *Server {
 	if mu == nil {
 		mu = &sync.Mutex{}
 	}
 	server := &Server{
-		chain: chain,
-		store: store,
-		mux:   http.NewServeMux(),
-		mu:    mu,
+		chain:     chain,
+		store:     store,
+		mux:       http.NewServeMux(),
+		mu:        mu,
+		authToken: strings.TrimSpace(opts.AuthToken),
 	}
 	server.mux.HandleFunc("/", server.handleIndex)
 	server.mux.HandleFunc("/getblockcount", server.handleGetBlockCount)
@@ -78,7 +89,27 @@ func NewWithLock(chain *blockchain.Chain, store *blockstore.Store, mu *sync.Mute
 }
 
 func (s *Server) Handler() http.Handler {
+	if s.authToken != "" {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !s.authorized(r) {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="pacd"`)
+				writeError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			s.mux.ServeHTTP(w, r)
+		})
+	}
 	return s.mux
+}
+
+func (s *Server) authorized(r *http.Request) bool {
+	got := strings.TrimSpace(r.Header.Get("Authorization"))
+	const prefix = "Bearer "
+	if !strings.HasPrefix(got, prefix) {
+		return false
+	}
+	token := strings.TrimSpace(strings.TrimPrefix(got, prefix))
+	return subtle.ConstantTimeCompare([]byte(token), []byte(s.authToken)) == 1
 }
 
 func (s *Server) SetBlockConnectedCallback(fn func(*wire.MsgBlock)) {
@@ -536,12 +567,16 @@ func (s *Server) handleSubmitBlock(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.chain.AddBlock(block); err != nil {
+	if err := s.chain.ValidateBlock(block); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := s.store.Append(block); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := s.chain.AddBlock(block); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.pruneMempoolLocked(block)
@@ -603,12 +638,16 @@ func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := s.chain.AddBlock(block); err != nil {
+		if err := s.chain.ValidateBlock(block); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		if err := s.store.Append(block); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if err := s.chain.AddBlock(block); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		s.pruneMempoolLocked(block)

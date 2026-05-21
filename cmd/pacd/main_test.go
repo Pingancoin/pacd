@@ -99,6 +99,38 @@ func TestBuildLaunchCheckReportSimnet(t *testing.T) {
 	}
 }
 
+func TestValidateRPCExposure(t *testing.T) {
+	mainnet := chaincfg.MainNetParams()
+	if err := validateRPCExposure(mainnet, true, "127.0.0.1:9509", "", false); err != nil {
+		t.Fatalf("loopback mainnet RPC rejected: %v", err)
+	}
+	if err := validateRPCExposure(mainnet, true, "0.0.0.0:9509", "secret", false); err != nil {
+		t.Fatalf("authenticated public mainnet RPC rejected: %v", err)
+	}
+	if err := validateRPCExposure(mainnet, true, "0.0.0.0:9509", "", false); err == nil {
+		t.Fatal("unauthenticated public mainnet RPC was accepted")
+	}
+	if err := validateRPCExposure(chaincfg.SimNetParams(), true, "0.0.0.0:9509", "", false); err != nil {
+		t.Fatalf("simnet public RPC rejected: %v", err)
+	}
+}
+
+func TestRPCListenIsLoopback(t *testing.T) {
+	tests := map[string]bool{
+		"127.0.0.1:9509":  true,
+		"[::1]:9509":      true,
+		"localhost:9509":  true,
+		"0.0.0.0:9509":    false,
+		":9509":           false,
+		"192.0.2.10:9509": false,
+	}
+	for listen, want := range tests {
+		if got := rpcListenIsLoopback(listen); got != want {
+			t.Fatalf("rpcListenIsLoopback(%q) = %t, want %t", listen, got, want)
+		}
+	}
+}
+
 func TestPrintLaunchCheckJSON(t *testing.T) {
 	report := launchCheckReport{
 		Network: "mainnet",

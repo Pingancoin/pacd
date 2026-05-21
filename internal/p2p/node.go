@@ -785,13 +785,16 @@ func (n *Node) connectBlock(block *wire.MsgBlock) (bool, []*wire.MsgBlock, error
 		n.addOrphanLocked(block)
 		return false, nil, nil
 	}
-	if err := n.cfg.Chain.AddBlock(block); err != nil {
+	if err := n.cfg.Chain.ValidateBlock(block); err != nil {
 		return false, nil, err
 	}
 	if n.cfg.Store != nil {
 		if err := n.cfg.Store.Append(block); err != nil {
 			return false, nil, err
 		}
+	}
+	if err := n.cfg.Chain.AddBlock(block); err != nil {
+		return false, nil, err
 	}
 	connected := []*wire.MsgBlock{block}
 	connected = append(connected, n.connectOrphansLocked(block.MustBlockHash())...)
@@ -1327,7 +1330,7 @@ func (n *Node) connectOrphansLocked(parentHash wire.Hash) []*wire.MsgBlock {
 			continue
 		}
 		delete(n.orphans, orphanHash)
-		if err := n.cfg.Chain.AddBlock(orphan); err != nil {
+		if err := n.cfg.Chain.ValidateBlock(orphan); err != nil {
 			n.logf("p2p orphan connect failed %s: %v", orphanHash, err)
 			continue
 		}
@@ -1336,6 +1339,10 @@ func (n *Node) connectOrphansLocked(parentHash wire.Hash) []*wire.MsgBlock {
 				n.logf("p2p orphan persist failed %s: %v", orphanHash, err)
 				continue
 			}
+		}
+		if err := n.cfg.Chain.AddBlock(orphan); err != nil {
+			n.logf("p2p orphan connect failed %s: %v", orphanHash, err)
+			continue
 		}
 		connected = append(connected, orphan)
 		connected = append(connected, n.connectOrphansLocked(orphanHash)...)
