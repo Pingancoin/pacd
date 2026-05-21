@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Pingancoin pacd health check every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=pacd-healthcheck.service
+
+[Install]
+WantedBy=timers.target

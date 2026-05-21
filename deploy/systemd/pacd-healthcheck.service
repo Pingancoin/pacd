@@ -1,0 +1,7 @@
+[Unit]
+Description=Pingancoin pacd health check
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/pingancoin/pacd-healthcheck.env
+ExecStart=/usr/local/bin/pacd-health-check

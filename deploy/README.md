@@ -54,6 +54,11 @@ sudo chown -R pacd:pacd /var/lib/pacd
 3. Copy:
    - [systemd/pacd-mainnet.service](/Users/fanye/Documents/pac/deploy/systemd/pacd-mainnet.service)
    - [pacd-mainnet.env.example](/Users/fanye/Documents/pac/deploy/pacd-mainnet.env.example)
+   - optional static peer drop-in: [systemd/pacd-mainnet-static-peers.conf.example](/Users/fanye/Documents/pac/deploy/systemd/pacd-mainnet-static-peers.conf.example)
+   - optional health timer:
+     - [systemd/pacd-healthcheck.service](/Users/fanye/Documents/pac/deploy/systemd/pacd-healthcheck.service)
+     - [systemd/pacd-healthcheck.timer](/Users/fanye/Documents/pac/deploy/systemd/pacd-healthcheck.timer)
+     - [pacd-healthcheck.env.example](/Users/fanye/Documents/pac/deploy/pacd-healthcheck.env.example)
    - optional reverse proxy template: [nginx/pacd-rpc.conf.example](/Users/fanye/Documents/pac/deploy/nginx/pacd-rpc.conf.example)
 
 4. Adjust `/etc/pingancoin/pacd-mainnet.env`
@@ -74,6 +79,40 @@ sudo systemctl start pacd-mainnet
 sudo systemctl status pacd-mainnet
 ```
 
+## Seed Node Static Peers
+
+For the first three official seed nodes, prefer a systemd drop-in that connects
+each node to the other two seed nodes explicitly. This makes the early network
+less dependent on DNS/discovery timing while still keeping normal discovery
+enabled.
+
+Create `/etc/systemd/system/pacd-mainnet.service.d/static-peers.conf` from the
+example and remove the local node from its own `--connect` list. Then reload and
+restart:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart pacd-mainnet
+```
+
+## Health Checks
+
+Install the health check script and timer:
+
+```bash
+sudo install -m 0755 scripts/pacd-health-check.sh /usr/local/bin/pacd-health-check
+sudo install -m 0644 deploy/systemd/pacd-healthcheck.service /etc/systemd/system/pacd-healthcheck.service
+sudo install -m 0644 deploy/systemd/pacd-healthcheck.timer /etc/systemd/system/pacd-healthcheck.timer
+sudo cp deploy/pacd-healthcheck.env.example /etc/pingancoin/pacd-healthcheck.env
+sudo systemctl daemon-reload
+sudo systemctl enable --now pacd-healthcheck.timer
+```
+
+For seed nodes, set `PACD_HEALTH_MIN_PEERS=1` or higher. The timer logs failures
+to journald and returns non-zero when the service is down, RPC is unavailable,
+network name is wrong, height is below the configured minimum, or peer count is
+too low.
+
 ## Pre-launch checklist
 
 - final 3-of-5 project payout script inserted into mainnet params
@@ -81,6 +120,8 @@ sudo systemctl status pacd-mainnet
 - DNS for `server1..server3.pingancoin.org` resolves correctly
 - P2P port `9508/tcp` reachable from the public internet on seed nodes
 - RPC port `9509/tcp` bound privately unless intentionally proxied
+- static seed peer drop-ins are installed on official seed nodes
+- health check timer is enabled on official seed nodes
 - proxied RPC uses an internal bearer token or stays on a trusted private network
 - `scripts/mainnet-release-check.sh` passes on the release commit
 - release binaries built from a clean git tree
