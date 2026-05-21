@@ -127,15 +127,18 @@ func (s *Server) SetPeerCallbacks(peerInfo func() []PeerSnapshot, peerCount func
 }
 
 func (s *Server) AcceptTransaction(tx *wire.MsgTx) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.acceptTransactionLocked(tx)
+}
+
+func (s *Server) acceptTransactionLocked(tx *wire.MsgTx) (bool, error) {
 	if tx == nil {
 		return false, fmt.Errorf("transaction is nil")
 	}
 	if tx.IsCoinbase() {
 		return false, fmt.Errorf("coinbase transactions are not accepted into mempool")
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	txHash := tx.MustTxHash()
 	for _, existing := range s.mempool {
@@ -179,7 +182,36 @@ func (s *Server) NotifyBlockConnected(block *wire.MsgBlock) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pruneMempoolLocked(block)
+	s.revalidateMempoolLocked(includedTxHashes(block))
+}
+
+func (s *Server) NotifyChainReorganized(disconnected []*wire.MsgBlock, connected []*wire.MsgBlock) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	included := make(map[wire.Hash]struct{})
+	for _, block := range connected {
+		for hash := range includedTxHashes(block) {
+			included[hash] = struct{}{}
+		}
+	}
+
+	for i := len(disconnected) - 1; i >= 0; i-- {
+		block := disconnected[i]
+		if block == nil {
+			continue
+		}
+		for txIndex, tx := range block.Transactions {
+			if txIndex == 0 || tx == nil {
+				continue
+			}
+			if _, ok := included[tx.MustTxHash()]; ok {
+				continue
+			}
+			_, _ = s.acceptTransactionLocked(tx)
+		}
+	}
+	s.revalidateMempoolLocked(included)
 }
 
 func (s *Server) ListenAndServe(ctx context.Context, listen string) error {
@@ -1005,12 +1037,12 @@ func transactionResults(params *chaincfg.Params, txs []*wire.MsgTx) []transactio
 }
 
 func (s *Server) pruneMempoolLocked(block *wire.MsgBlock) {
-	if len(s.mempool) == 0 || block == nil {
+	s.revalidateMempoolLocked(includedTxHashes(block))
+}
+
+func (s *Server) revalidateMempoolLocked(included map[wire.Hash]struct{}) {
+	if len(s.mempool) == 0 {
 		return
-	}
-	included := make(map[wire.Hash]struct{}, len(block.Transactions))
-	for _, tx := range block.Transactions {
-		included[tx.MustTxHash()] = struct{}{}
 	}
 	filtered := make([]*wire.MsgTx, 0, len(s.mempool))
 	for _, tx := range s.mempool {
@@ -1023,6 +1055,19 @@ func (s *Server) pruneMempoolLocked(block *wire.MsgBlock) {
 		}
 	}
 	s.mempool = filtered
+}
+
+func includedTxHashes(block *wire.MsgBlock) map[wire.Hash]struct{} {
+	if block == nil {
+		return nil
+	}
+	included := make(map[wire.Hash]struct{}, len(block.Transactions))
+	for _, tx := range block.Transactions {
+		if tx != nil {
+			included[tx.MustTxHash()] = struct{}{}
+		}
+	}
+	return included
 }
 
 func peersCount(peers []PeerSnapshot) int {

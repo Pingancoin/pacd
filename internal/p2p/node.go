@@ -62,6 +62,7 @@ type Config struct {
 	TxByHash         func(wire.Hash) (*wire.MsgTx, bool)
 	AcceptTx         func(*wire.MsgTx) (bool, error)
 	OnBlockConnected func(*wire.MsgBlock)
+	OnChainReorg     func(disconnected []*wire.MsgBlock, connected []*wire.MsgBlock)
 	UserAgent        string
 	Logger           *log.Logger
 }
@@ -177,6 +178,10 @@ func (n *Node) SetTransactionCallbacks(hasTx func(wire.Hash) bool, txByHash func
 
 func (n *Node) SetBlockConnectedCallback(fn func(*wire.MsgBlock)) {
 	n.cfg.OnBlockConnected = fn
+}
+
+func (n *Node) SetChainReorgCallback(fn func(disconnected []*wire.MsgBlock, connected []*wire.MsgBlock)) {
+	n.cfg.OnChainReorg = fn
 }
 
 func (n *Node) Peers() []PeerInfo {
@@ -645,16 +650,22 @@ func (n *Node) handleBlock(addr string, payload []byte) error {
 	if err != nil {
 		return err
 	}
-	connected, connectedBlocks, err := n.connectBlock(block)
+	connected, connectedBlocks, disconnectedBlocks, err := n.connectBlock(block)
 	if err != nil {
 		return err
 	}
 	if connected {
 		n.logf("p2p connected block height=%d hash=%s", block.Header.Height, block.MustBlockHash())
-		for _, connectedBlock := range connectedBlocks {
-			if n.cfg.OnBlockConnected != nil {
-				n.cfg.OnBlockConnected(connectedBlock)
+		if len(disconnectedBlocks) > 0 && n.cfg.OnChainReorg != nil {
+			n.cfg.OnChainReorg(disconnectedBlocks, connectedBlocks)
+		} else {
+			for _, connectedBlock := range connectedBlocks {
+				if n.cfg.OnBlockConnected != nil {
+					n.cfg.OnBlockConnected(connectedBlock)
+				}
 			}
+		}
+		for _, connectedBlock := range connectedBlocks {
 			n.broadcastInventory(connectedBlock.MustBlockHash(), addr)
 		}
 	}
@@ -769,15 +780,15 @@ func (n *Node) blockByHash(hash wire.Hash) (*wire.MsgBlock, bool) {
 	return n.cfg.Chain.BlockByHash(hash)
 }
 
-func (n *Node) connectBlock(block *wire.MsgBlock) (bool, []*wire.MsgBlock, error) {
+func (n *Node) connectBlock(block *wire.MsgBlock) (bool, []*wire.MsgBlock, []*wire.MsgBlock, error) {
 	n.lockChain()
 	defer n.unlockChain()
 	if n.cfg.Chain == nil {
-		return false, nil, nil
+		return false, nil, nil, nil
 	}
 	if block.Header.Height <= n.cfg.Chain.Height() {
 		if existing, ok := n.cfg.Chain.BlockByHeight(block.Header.Height); ok && existing.MustBlockHash() == block.MustBlockHash() {
-			return false, nil, nil
+			return false, nil, nil, nil
 		}
 		return n.connectSideBlockLocked(block)
 	}
@@ -787,25 +798,25 @@ func (n *Node) connectBlock(block *wire.MsgBlock) (bool, []*wire.MsgBlock, error
 			return n.connectSideBlockLocked(block)
 		}
 		if err := n.validateOrphanCandidateLocked(block); err != nil {
-			return false, nil, err
+			return false, nil, nil, err
 		}
 		n.addOrphanLocked(block)
-		return false, nil, nil
+		return false, nil, nil, nil
 	}
 	if err := n.cfg.Chain.ValidateBlock(block); err != nil {
-		return false, nil, err
+		return false, nil, nil, err
 	}
 	if n.cfg.Store != nil {
 		if err := n.cfg.Store.Append(block); err != nil {
-			return false, nil, err
+			return false, nil, nil, err
 		}
 	}
 	if err := n.cfg.Chain.AddBlock(block); err != nil {
-		return false, nil, err
+		return false, nil, nil, err
 	}
 	connected := []*wire.MsgBlock{block}
 	connected = append(connected, n.connectOrphansLocked(block.MustBlockHash())...)
-	return true, connected, nil
+	return true, connected, nil, nil
 }
 
 func (n *Node) bestHeight() uint32 {
@@ -1301,20 +1312,20 @@ func (n *Node) addOrphanLocked(block *wire.MsgBlock) {
 	n.orphansByPrev[prev] = append(n.orphansByPrev[prev], hash)
 }
 
-func (n *Node) connectSideBlockLocked(block *wire.MsgBlock) (bool, []*wire.MsgBlock, error) {
+func (n *Node) connectSideBlockLocked(block *wire.MsgBlock) (bool, []*wire.MsgBlock, []*wire.MsgBlock, error) {
 	if err := n.validateSideCandidateLocked(block); err != nil {
 		n.logf("p2p ignored invalid side block height=%d hash=%s: %v", block.Header.Height, block.MustBlockHash(), err)
-		return false, nil, nil
+		return false, nil, nil, nil
 	}
 	hash := block.MustBlockHash()
 	if _, ok := n.sideBlocks[hash]; !ok {
 		n.addSideBlockLocked(block)
 	}
-	connected, branch, err := n.tryReorganizeLocked(hash)
+	connected, branch, disconnected, err := n.tryReorganizeLocked(hash)
 	if err != nil {
-		return false, nil, err
+		return false, nil, nil, err
 	}
-	return connected, branch, nil
+	return connected, branch, disconnected, nil
 }
 
 func (n *Node) addSideBlockLocked(block *wire.MsgBlock) {
@@ -1327,30 +1338,31 @@ func (n *Node) addSideBlockLocked(block *wire.MsgBlock) {
 	n.sideByPrev[prev] = append(n.sideByPrev[prev], hash)
 }
 
-func (n *Node) tryReorganizeLocked(tipHash wire.Hash) (bool, []*wire.MsgBlock, error) {
+func (n *Node) tryReorganizeLocked(tipHash wire.Hash) (bool, []*wire.MsgBlock, []*wire.MsgBlock, error) {
 	branch, ok := n.sideBranchLocked(tipHash)
 	if !ok || len(branch) == 0 {
-		return false, nil, nil
+		return false, nil, nil, nil
 	}
 	if branch[len(branch)-1].Header.Height <= n.cfg.Chain.Height() {
-		return false, nil, nil
+		return false, nil, nil, nil
 	}
+	disconnected := n.disconnectedBlocksForBranchLocked(branch)
 	reorganizedBlocks, ok, err := n.cfg.Chain.ReorganizedBlocks(branch)
 	if err != nil || !ok {
-		return false, nil, err
+		return false, nil, nil, err
 	}
 	if n.cfg.Store != nil {
 		if err := n.cfg.Store.Replace(reorganizedBlocks); err != nil {
-			return false, nil, err
+			return false, nil, nil, err
 		}
 	}
 	ok, err = n.cfg.Chain.Reorganize(branch)
 	if err != nil || !ok {
-		return false, nil, err
+		return false, nil, nil, err
 	}
 	n.pruneSideBranchLocked(branch)
 	n.logf("p2p reorganized to height=%d hash=%s", n.cfg.Chain.Height(), n.cfg.Chain.Tip().MustBlockHash())
-	return true, branch, nil
+	return true, branch, disconnected, nil
 }
 
 func (n *Node) sideBranchLocked(tipHash wire.Hash) ([]*wire.MsgBlock, bool) {
@@ -1388,6 +1400,26 @@ func (n *Node) pruneSideBranchLocked(branch []*wire.MsgBlock) {
 			delete(n.sideByPrev, prev)
 		}
 	}
+}
+
+func (n *Node) disconnectedBlocksForBranchLocked(branch []*wire.MsgBlock) []*wire.MsgBlock {
+	if len(branch) == 0 {
+		return nil
+	}
+	forkHash := branch[0].Header.PrevBlock
+	fork, ok := n.cfg.Chain.BlockByHash(forkHash)
+	if !ok {
+		return nil
+	}
+	disconnected := make([]*wire.MsgBlock, 0)
+	for height := n.cfg.Chain.Height(); height > fork.Header.Height; height-- {
+		block, ok := n.cfg.Chain.BlockByHeight(height)
+		if !ok {
+			break
+		}
+		disconnected = append(disconnected, block)
+	}
+	return disconnected
 }
 
 func (n *Node) knowsSideOrMainPrevLocked(hash wire.Hash) bool {

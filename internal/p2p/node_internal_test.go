@@ -50,7 +50,7 @@ func TestInvalidOrphanIsRejectedBeforeCache(t *testing.T) {
 	block.Header.PrevBlock[0] ^= 0xff
 	block.Transactions[0].TxOut[0].Value++
 
-	connected, connectedBlocks, err := node.connectBlock(block)
+	connected, connectedBlocks, _, err := node.connectBlock(block)
 	if err == nil {
 		t.Fatal("invalid orphan was accepted")
 	}
@@ -90,7 +90,7 @@ func TestValidOrphanConnectsAfterParent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	connected, connectedBlocks, err := node.connectBlock(block2)
+	connected, connectedBlocks, _, err := node.connectBlock(block2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestValidOrphanConnectsAfterParent(t *testing.T) {
 		t.Fatalf("orphan count=%d, want 1", len(node.orphans))
 	}
 
-	connected, connectedBlocks, err = node.connectBlock(block1)
+	connected, connectedBlocks, _, err = node.connectBlock(block1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestStaleConflictingBlockIsIgnored(t *testing.T) {
 		t.Fatal("test did not create a conflicting block")
 	}
 
-	connected, connectedBlocks, err := node.connectBlock(blockB)
+	connected, connectedBlocks, _, err := node.connectBlock(blockB)
 	if err != nil {
 		t.Fatalf("stale conflicting block returned error: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestLongerSideChainReorganizesAndPersists(t *testing.T) {
 	}
 
 	for i, block := range sideBlocks {
-		connected, connectedBlocks, err := node.connectBlock(block)
+		connected, connectedBlocks, disconnectedBlocks, err := node.connectBlock(block)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -211,6 +211,9 @@ func TestLongerSideChainReorganizesAndPersists(t *testing.T) {
 		if i == 2 {
 			if !connected || len(connectedBlocks) != 3 {
 				t.Fatalf("longer side chain did not reorganize: connected=%t blocks=%d", connected, len(connectedBlocks))
+			}
+			if len(disconnectedBlocks) != 2 {
+				t.Fatalf("disconnected blocks=%d, want 2", len(disconnectedBlocks))
 			}
 		}
 	}

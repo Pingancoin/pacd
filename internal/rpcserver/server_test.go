@@ -361,6 +361,105 @@ func TestGetBlockTemplateAndSubmitBlock(t *testing.T) {
 	}
 }
 
+func TestNotifyChainReorganizedRestoresValidDisconnectedTransactions(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	chain := blockchain.New(params)
+	walletDir := t.TempDir()
+	w, err := wallet.Create(wallet.Path(walletDir, params.Name), params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.AddKey(params, "recipient"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.AddKey(params, "change"); err != nil {
+		t.Fatal(err)
+	}
+
+	minerScript, err := address.DecodeAddressScript(params, w.Keys[0].Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockTime := time.Unix(params.GenesisBlock.Header.Timestamp, 0)
+	blockTime = blockTime.Add(params.TargetTimePerBlock)
+	block1, err := mining.MineBlock(chain, minerScript, blockTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.AddBlock(block1); err != nil {
+		t.Fatal(err)
+	}
+	blockTime = blockTime.Add(params.TargetTimePerBlock)
+	block2, err := mining.MineBlock(chain, minerScript, blockTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.AddBlock(block2); err != nil {
+		t.Fatal(err)
+	}
+
+	coinbase := block1.Transactions[0]
+	balance := wallet.Balance{UTXOs: []wallet.UTXO{{
+		Address:  w.Keys[0].Address,
+		TxHash:   coinbase.MustTxHash().String(),
+		Vout:     0,
+		Value:    coinbase.TxOut[0].Value,
+		Height:   block1.Header.Height,
+		Coinbase: true,
+		Mature:   true,
+	}}}
+	draft, err := wallet.BuildDraftTx(params, w, balance, w.Keys[1].Address, chaincfg.Coin, 10_000, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wallet.SignDraftTx(params, w, draft); err != nil {
+		t.Fatal(err)
+	}
+
+	blockTime = blockTime.Add(params.TargetTimePerBlock)
+	oldBlock3, err := mining.MineBlockWithTransactions(chain, minerScript, blockTime, []*wire.MsgTx{draft.Tx}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.AddBlock(oldBlock3); err != nil {
+		t.Fatal(err)
+	}
+
+	sideChain := blockchain.New(params)
+	if err := sideChain.AddBlock(block1); err != nil {
+		t.Fatal(err)
+	}
+	if err := sideChain.AddBlock(block2); err != nil {
+		t.Fatal(err)
+	}
+	sideBlocks := make([]*wire.MsgBlock, 0, 2)
+	sideTime := time.Unix(block2.Header.Timestamp, 0)
+	for i := 0; i < 2; i++ {
+		sideTime = sideTime.Add(params.TargetTimePerBlock)
+		block, err := mining.MineBlock(sideChain, []byte("SsimSide"), sideTime, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sideBlocks = append(sideBlocks, block)
+		if err := sideChain.AddBlock(block); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	server := rpcserver.New(chain, blockstore.New(t.TempDir()))
+	ok, err := chain.Reorganize(sideBlocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("side chain did not reorganize")
+	}
+	server.NotifyChainReorganized([]*wire.MsgBlock{oldBlock3}, sideBlocks)
+	if !server.HasTransaction(draft.Tx.MustTxHash()) {
+		t.Fatal("valid disconnected transaction was not restored to mempool")
+	}
+}
+
 func TestNetworkInfoAndPeerInfo(t *testing.T) {
 	params := chaincfg.SimNetParams()
 	chain := blockchain.New(params)

@@ -632,6 +632,7 @@ func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bo
 			server.SetTransactionAcceptedCallback(node.RelayTransaction)
 			server.SetPeerCallbacks(peerSnapshots(node), node.PeerCount, node.KnownAddressCount)
 			node.SetBlockConnectedCallback(server.NotifyBlockConnected)
+			node.SetChainReorgCallback(server.NotifyChainReorganized)
 			node.SetTransactionCallbacks(server.HasTransaction, server.TransactionByHash, server.AcceptTransaction)
 		}
 	}
