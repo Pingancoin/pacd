@@ -25,15 +25,16 @@ import (
 )
 
 const (
-	defaultHandshakeTimeout  = 10 * time.Second
-	defaultIdleTimeout       = 2 * time.Minute
-	defaultMaxPeers          = 32
-	defaultMaxOrphans        = 128
-	defaultDiscoveryInterval = 500 * time.Millisecond
-	defaultDiscoveryRetry    = 5 * time.Second
-	banThreshold             = 100
-	banScoreMalformed        = 100
-	banScoreInvalidChain     = 50
+	defaultHandshakeTimeout   = 10 * time.Second
+	defaultIdleTimeout        = 2 * time.Minute
+	defaultMaxPeers           = 32
+	defaultMaxOrphans         = 128
+	defaultMaxOrphanHeightGap = 288
+	defaultDiscoveryInterval  = 500 * time.Millisecond
+	defaultDiscoveryRetry     = 5 * time.Second
+	banThreshold              = 100
+	banScoreMalformed         = 100
+	banScoreInvalidChain      = 50
 )
 
 type addrSource string
@@ -778,6 +779,9 @@ func (n *Node) connectBlock(block *wire.MsgBlock) (bool, []*wire.MsgBlock, error
 	}
 	tip := n.cfg.Chain.Tip()
 	if block.Header.PrevBlock != tip.MustBlockHash() || block.Header.Height != n.cfg.Chain.Height()+1 {
+		if err := n.validateOrphanCandidateLocked(block); err != nil {
+			return false, nil, err
+		}
 		n.addOrphanLocked(block)
 		return false, nil, nil
 	}
@@ -824,7 +828,7 @@ func (n *Node) reservePeer(addr string) bool {
 	if _, ok := n.peers[addr]; ok {
 		return false
 	}
-	if n.banScores[addr] >= banThreshold {
+	if n.banScores[banKey(addr)] >= banThreshold {
 		return false
 	}
 	n.peers[addr] = &peerState{info: PeerInfo{Address: addr}}
@@ -1044,7 +1048,7 @@ func (n *Node) discoveryCandidates() []string {
 		if n.isStaticPeer(addr) {
 			continue
 		}
-		if n.banScores[addr] >= banThreshold {
+		if n.banScores[banKey(addr)] >= banThreshold {
 			continue
 		}
 		if last, ok := n.recentDials[addr]; ok && now.Sub(last) < n.discoveryRetryDelay(entry.Failures) {
@@ -1229,6 +1233,15 @@ func normalizeAddr(addr string) string {
 	return net.JoinHostPort(host, port)
 }
 
+func banKey(addr string) string {
+	addr = strings.TrimSpace(addr)
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return addr
+	}
+	return host
+}
+
 func (n *Node) hasBlock(hash wire.Hash) bool {
 	n.lockChain()
 	defer n.unlockChain()
@@ -1278,6 +1291,32 @@ func (n *Node) addOrphanLocked(block *wire.MsgBlock) {
 	n.orphansByPrev[prev] = append(n.orphansByPrev[prev], hash)
 }
 
+func (n *Node) validateOrphanCandidateLocked(block *wire.MsgBlock) error {
+	if len(block.Transactions) == 0 {
+		return fmt.Errorf("orphan block has no transactions")
+	}
+	if block.Header.Height <= n.cfg.Chain.Height() {
+		return fmt.Errorf("orphan height %d is not ahead of tip %d", block.Header.Height, n.cfg.Chain.Height())
+	}
+	if block.Header.Height > n.cfg.Chain.Height()+defaultMaxOrphanHeightGap {
+		return fmt.Errorf("orphan height %d is too far ahead of tip %d", block.Header.Height, n.cfg.Chain.Height())
+	}
+	if block.Header.Timestamp <= n.cfg.Chain.Tip().Header.Timestamp {
+		return fmt.Errorf("orphan timestamp must be ahead of tip")
+	}
+	root, err := wire.CalcMerkleRoot(block.Transactions)
+	if err != nil {
+		return err
+	}
+	if block.Header.MerkleRoot != root {
+		return fmt.Errorf("orphan merkle root mismatch")
+	}
+	if err := consensus.CheckProofOfWork(&block.Header, n.cfg.Params); err != nil {
+		return fmt.Errorf("orphan proof of work: %w", err)
+	}
+	return nil
+}
+
 func (n *Node) connectOrphansLocked(parentHash wire.Hash) []*wire.MsgBlock {
 	hashes := append([]wire.Hash(nil), n.orphansByPrev[parentHash]...)
 	delete(n.orphansByPrev, parentHash)
@@ -1317,12 +1356,15 @@ func removeHash(hashes []wire.Hash, target wire.Hash) []wire.Hash {
 func (n *Node) addBanScore(addr string, delta int, reason string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.banScores[addr] += delta
-	if n.banScores[addr] >= banThreshold {
-		if peer, ok := n.peers[addr]; ok && peer.conn != nil {
-			_ = peer.conn.Close()
+	key := banKey(addr)
+	n.banScores[key] += delta
+	if n.banScores[key] >= banThreshold {
+		for peerAddr, peer := range n.peers {
+			if banKey(peerAddr) == key && peer.conn != nil {
+				_ = peer.conn.Close()
+			}
 		}
-		n.logf("p2p banned %s score=%d reason=%s", addr, n.banScores[addr], reason)
+		n.logf("p2p banned %s score=%d reason=%s", key, n.banScores[key], reason)
 	}
 }
 
