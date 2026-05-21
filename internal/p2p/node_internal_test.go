@@ -113,3 +113,45 @@ func TestValidOrphanConnectsAfterParent(t *testing.T) {
 		t.Fatalf("orphan cache not cleared; count=%d", len(node.orphans))
 	}
 }
+
+func TestStaleConflictingBlockIsIgnored(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	chain := blockchain.New(params)
+	node, err := NewNode(Config{
+		Params:  params,
+		Chain:   chain,
+		ChainMu: &sync.Mutex{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blockTime := time.Unix(params.GenesisBlock.Header.Timestamp, 0).Add(params.TargetTimePerBlock)
+	blockA, err := mining.MineBlock(chain, []byte("SsimMinerA"), blockTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.AddBlock(blockA); err != nil {
+		t.Fatal(err)
+	}
+
+	sideChain := blockchain.New(params)
+	blockB, err := mining.MineBlock(sideChain, []byte("SsimMinerB"), blockTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blockB.MustBlockHash() == blockA.MustBlockHash() {
+		t.Fatal("test did not create a conflicting block")
+	}
+
+	connected, connectedBlocks, err := node.connectBlock(blockB)
+	if err != nil {
+		t.Fatalf("stale conflicting block returned error: %v", err)
+	}
+	if connected || len(connectedBlocks) != 0 {
+		t.Fatalf("stale conflicting block connected: connected=%t blocks=%d", connected, len(connectedBlocks))
+	}
+	if chain.Tip().MustBlockHash() != blockA.MustBlockHash() {
+		t.Fatalf("tip changed after stale conflict: %s", chain.Tip().MustBlockHash())
+	}
+}

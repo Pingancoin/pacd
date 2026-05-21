@@ -775,7 +775,8 @@ func (n *Node) connectBlock(block *wire.MsgBlock) (bool, []*wire.MsgBlock, error
 		if existing, ok := n.cfg.Chain.BlockByHeight(block.Header.Height); ok && existing.MustBlockHash() == block.MustBlockHash() {
 			return false, nil, nil
 		}
-		return false, nil, fmt.Errorf("stale or conflicting block at height %d", block.Header.Height)
+		n.logf("p2p ignored stale/conflicting block height=%d hash=%s", block.Header.Height, block.MustBlockHash())
+		return false, nil, nil
 	}
 	tip := n.cfg.Chain.Tip()
 	if block.Header.PrevBlock != tip.MustBlockHash() || block.Header.Height != n.cfg.Chain.Height()+1 {
