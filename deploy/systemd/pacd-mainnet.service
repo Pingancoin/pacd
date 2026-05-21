@@ -13,7 +13,7 @@ ExecStart=/usr/local/bin/pacd \
   --datadir ${PACD_DATADIR} \
   --rpc \
   --rpclisten ${PACD_RPC_LISTEN} \
-  --rpctoken ${PACD_RPC_TOKEN} \
+  --rpctoken=${PACD_RPC_TOKEN} \
   --p2p \
   --listen ${PACD_P2P_LISTEN} \
   --maxpeers ${PACD_MAX_PEERS}
