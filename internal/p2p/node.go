@@ -539,6 +539,9 @@ func (n *Node) handleHeaders(addr string, payload []byte) error {
 	if len(hashes) == 0 {
 		return nil
 	}
+	if len(hashes) > MaxBlocksPerRequest {
+		hashes = hashes[:MaxBlocksPerRequest]
+	}
 	serialized, err := (GetBlocks{Hashes: hashes}).Serialize()
 	if err != nil {
 		return err

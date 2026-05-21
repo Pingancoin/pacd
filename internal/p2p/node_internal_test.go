@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -113,6 +114,65 @@ func TestValidOrphanConnectsAfterParent(t *testing.T) {
 	}
 	if len(node.orphans) != 0 {
 		t.Fatalf("orphan cache not cleared; count=%d", len(node.orphans))
+	}
+}
+
+func TestHandleHeadersCapsGetBlocksRequest(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	localChain := blockchain.New(params)
+	remoteChain := blockchain.New(params)
+	blockTime := time.Unix(params.GenesisBlock.Header.Timestamp, 0)
+	headers := make([]wire.BlockHeader, 0, MaxBlocksPerRequest+1)
+	for i := 0; i < MaxBlocksPerRequest+1; i++ {
+		blockTime = blockTime.Add(params.TargetTimePerBlock)
+		block, err := mining.MineBlock(remoteChain, []byte("SsimMiner"), blockTime, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		headers = append(headers, block.Header)
+		if err := remoteChain.AddBlock(block); err != nil {
+			t.Fatal(err)
+		}
+	}
+	payload, err := (Headers{Headers: headers}).Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	node, err := NewNode(Config{
+		Params:  params,
+		Chain:   localChain,
+		ChainMu: &sync.Mutex{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	addr := "127.0.0.1:10000"
+	node.updatePeer(addr, PeerInfo{Address: addr}, server, "")
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- node.handleHeaders(addr, payload)
+	}()
+	msg, err := ReadMessage(client, params.NetworkMagic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+	if msg.Command != CommandGetBlocks {
+		t.Fatalf("command = %s, want %s", msg.Command, CommandGetBlocks)
+	}
+	req, err := DeserializeGetBlocks(msg.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(req.Hashes) != MaxBlocksPerRequest {
+		t.Fatalf("requested blocks = %d, want %d", len(req.Hashes), MaxBlocksPerRequest)
 	}
 }
 
