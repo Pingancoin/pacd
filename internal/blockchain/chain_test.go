@@ -228,6 +228,100 @@ func TestRejectDoubleSpendInBlock(t *testing.T) {
 	}
 }
 
+func TestReorganizeToLongerFork(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	mainChain := blockchain.New(params)
+	blockTime := time.Unix(params.GenesisBlock.Header.Timestamp, 0)
+
+	blockTime = blockTime.Add(params.TargetTimePerBlock)
+	main1, err := mining.MineBlock(mainChain, []byte("SsimMain1"), blockTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mainChain.AddBlock(main1); err != nil {
+		t.Fatal(err)
+	}
+	blockTime = blockTime.Add(params.TargetTimePerBlock)
+	main2, err := mining.MineBlock(mainChain, []byte("SsimMain2"), blockTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mainChain.AddBlock(main2); err != nil {
+		t.Fatal(err)
+	}
+
+	sideChain := blockchain.New(params)
+	sideTime := time.Unix(params.GenesisBlock.Header.Timestamp, 0)
+	sideBlocks := make([]*wire.MsgBlock, 0, 3)
+	for i := 0; i < 3; i++ {
+		sideTime = sideTime.Add(params.TargetTimePerBlock)
+		block, err := mining.MineBlock(sideChain, []byte("SsimSide"), sideTime, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sideBlocks = append(sideBlocks, block)
+		if err := sideChain.AddBlock(block); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ok, err := mainChain.Reorganize(sideBlocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("longer fork did not reorganize")
+	}
+	if mainChain.Height() != 3 || mainChain.Tip().MustBlockHash() != sideBlocks[2].MustBlockHash() {
+		t.Fatalf("unexpected reorganized tip height=%d hash=%s", mainChain.Height(), mainChain.Tip().MustBlockHash())
+	}
+	if _, ok := mainChain.BlockByHash(main2.MustBlockHash()); ok {
+		t.Fatal("old main-chain block is still active after reorg")
+	}
+}
+
+func TestReorganizeRejectsShorterFork(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	mainChain := blockchain.New(params)
+	blockTime := time.Unix(params.GenesisBlock.Header.Timestamp, 0)
+	for i := 0; i < 3; i++ {
+		blockTime = blockTime.Add(params.TargetTimePerBlock)
+		block, err := mining.MineBlock(mainChain, []byte("SsimMain"), blockTime, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := mainChain.AddBlock(block); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sideChain := blockchain.New(params)
+	sideTime := time.Unix(params.GenesisBlock.Header.Timestamp, 0)
+	var sideBlocks []*wire.MsgBlock
+	for i := 0; i < 2; i++ {
+		sideTime = sideTime.Add(params.TargetTimePerBlock)
+		block, err := mining.MineBlock(sideChain, []byte("SsimSide"), sideTime, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sideBlocks = append(sideBlocks, block)
+		if err := sideChain.AddBlock(block); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ok, err := mainChain.Reorganize(sideBlocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("shorter fork reorganized")
+	}
+	if mainChain.Height() != 3 {
+		t.Fatalf("height changed to %d", mainChain.Height())
+	}
+}
+
 func testWallet(t *testing.T, params *chaincfg.Params) *wallet.Wallet {
 	t.Helper()
 	w, err := wallet.Create(wallet.Path(t.TempDir(), params.Name), params)

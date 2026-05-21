@@ -77,6 +77,8 @@ type Node struct {
 	recentDials   map[string]time.Time
 	orphans       map[wire.Hash]*wire.MsgBlock
 	orphansByPrev map[wire.Hash][]wire.Hash
+	sideBlocks    map[wire.Hash]*wire.MsgBlock
+	sideByPrev    map[wire.Hash][]wire.Hash
 	banScores     map[string]int
 }
 
@@ -135,6 +137,8 @@ func NewNode(cfg Config) (*Node, error) {
 		recentDials:   make(map[string]time.Time),
 		orphans:       make(map[wire.Hash]*wire.MsgBlock),
 		orphansByPrev: make(map[wire.Hash][]wire.Hash),
+		sideBlocks:    make(map[wire.Hash]*wire.MsgBlock),
+		sideByPrev:    make(map[wire.Hash][]wire.Hash),
 		banScores:     make(map[string]int),
 	}
 	if err := node.loadAddrBook(); err != nil {
@@ -775,11 +779,13 @@ func (n *Node) connectBlock(block *wire.MsgBlock) (bool, []*wire.MsgBlock, error
 		if existing, ok := n.cfg.Chain.BlockByHeight(block.Header.Height); ok && existing.MustBlockHash() == block.MustBlockHash() {
 			return false, nil, nil
 		}
-		n.logf("p2p ignored stale/conflicting block height=%d hash=%s", block.Header.Height, block.MustBlockHash())
-		return false, nil, nil
+		return n.connectSideBlockLocked(block)
 	}
 	tip := n.cfg.Chain.Tip()
 	if block.Header.PrevBlock != tip.MustBlockHash() || block.Header.Height != n.cfg.Chain.Height()+1 {
+		if n.knowsSideOrMainPrevLocked(block.Header.PrevBlock) {
+			return n.connectSideBlockLocked(block)
+		}
 		if err := n.validateOrphanCandidateLocked(block); err != nil {
 			return false, nil, err
 		}
@@ -1293,6 +1299,154 @@ func (n *Node) addOrphanLocked(block *wire.MsgBlock) {
 	n.orphans[hash] = block
 	prev := block.Header.PrevBlock
 	n.orphansByPrev[prev] = append(n.orphansByPrev[prev], hash)
+}
+
+func (n *Node) connectSideBlockLocked(block *wire.MsgBlock) (bool, []*wire.MsgBlock, error) {
+	if err := n.validateSideCandidateLocked(block); err != nil {
+		n.logf("p2p ignored invalid side block height=%d hash=%s: %v", block.Header.Height, block.MustBlockHash(), err)
+		return false, nil, nil
+	}
+	hash := block.MustBlockHash()
+	if _, ok := n.sideBlocks[hash]; !ok {
+		n.addSideBlockLocked(block)
+	}
+	connected, branch, err := n.tryReorganizeLocked(hash)
+	if err != nil {
+		return false, nil, err
+	}
+	return connected, branch, nil
+}
+
+func (n *Node) addSideBlockLocked(block *wire.MsgBlock) {
+	hash := block.MustBlockHash()
+	if _, ok := n.sideBlocks[hash]; ok {
+		return
+	}
+	n.sideBlocks[hash] = block
+	prev := block.Header.PrevBlock
+	n.sideByPrev[prev] = append(n.sideByPrev[prev], hash)
+}
+
+func (n *Node) tryReorganizeLocked(tipHash wire.Hash) (bool, []*wire.MsgBlock, error) {
+	branch, ok := n.sideBranchLocked(tipHash)
+	if !ok || len(branch) == 0 {
+		return false, nil, nil
+	}
+	if branch[len(branch)-1].Header.Height <= n.cfg.Chain.Height() {
+		return false, nil, nil
+	}
+	reorganizedBlocks, ok, err := n.cfg.Chain.ReorganizedBlocks(branch)
+	if err != nil || !ok {
+		return false, nil, err
+	}
+	if n.cfg.Store != nil {
+		if err := n.cfg.Store.Replace(reorganizedBlocks); err != nil {
+			return false, nil, err
+		}
+	}
+	ok, err = n.cfg.Chain.Reorganize(branch)
+	if err != nil || !ok {
+		return false, nil, err
+	}
+	n.pruneSideBranchLocked(branch)
+	n.logf("p2p reorganized to height=%d hash=%s", n.cfg.Chain.Height(), n.cfg.Chain.Tip().MustBlockHash())
+	return true, branch, nil
+}
+
+func (n *Node) sideBranchLocked(tipHash wire.Hash) ([]*wire.MsgBlock, bool) {
+	var reversed []*wire.MsgBlock
+	seen := make(map[wire.Hash]struct{})
+	for {
+		if _, ok := seen[tipHash]; ok {
+			return nil, false
+		}
+		seen[tipHash] = struct{}{}
+		block, ok := n.sideBlocks[tipHash]
+		if !ok {
+			return nil, false
+		}
+		reversed = append(reversed, block)
+		if _, ok := n.cfg.Chain.BlockByHash(block.Header.PrevBlock); ok {
+			break
+		}
+		tipHash = block.Header.PrevBlock
+	}
+	branch := make([]*wire.MsgBlock, 0, len(reversed))
+	for i := len(reversed) - 1; i >= 0; i-- {
+		branch = append(branch, reversed[i])
+	}
+	return branch, true
+}
+
+func (n *Node) pruneSideBranchLocked(branch []*wire.MsgBlock) {
+	for _, block := range branch {
+		hash := block.MustBlockHash()
+		delete(n.sideBlocks, hash)
+		prev := block.Header.PrevBlock
+		n.sideByPrev[prev] = removeHash(n.sideByPrev[prev], hash)
+		if len(n.sideByPrev[prev]) == 0 {
+			delete(n.sideByPrev, prev)
+		}
+	}
+}
+
+func (n *Node) knowsSideOrMainPrevLocked(hash wire.Hash) bool {
+	if _, ok := n.cfg.Chain.BlockByHash(hash); ok {
+		return true
+	}
+	_, ok := n.sideBlocks[hash]
+	return ok
+}
+
+func (n *Node) validateSideCandidateLocked(block *wire.MsgBlock) error {
+	if len(block.Transactions) == 0 {
+		return fmt.Errorf("side block has no transactions")
+	}
+	if block.Header.Height == 0 {
+		return fmt.Errorf("side block cannot replace genesis")
+	}
+	if block.Header.Height > n.cfg.Chain.Height()+defaultMaxOrphanHeightGap {
+		return fmt.Errorf("side block height %d is too far ahead of tip %d", block.Header.Height, n.cfg.Chain.Height())
+	}
+	prev, ok := n.sideOrMainBlockLocked(block.Header.PrevBlock)
+	if !ok {
+		return fmt.Errorf("side block previous hash %s is unknown", block.Header.PrevBlock)
+	}
+	if block.Header.Height != prev.Header.Height+1 {
+		return fmt.Errorf("side block height %d does not extend previous height %d", block.Header.Height, prev.Header.Height)
+	}
+	if block.Header.Timestamp <= prev.Header.Timestamp {
+		return fmt.Errorf("side block timestamp must increase")
+	}
+	expectedBits := consensus.CalcASERTNextBits(
+		n.cfg.Params.GenesisBlock.Header.Bits,
+		n.cfg.Params.GenesisBlock.Header.Timestamp,
+		prev.Header.Timestamp,
+		int64(block.Header.Height),
+		n.cfg.Params,
+	)
+	if block.Header.Bits != expectedBits {
+		return fmt.Errorf("side block bits %08x do not match expected %08x", block.Header.Bits, expectedBits)
+	}
+	root, err := wire.CalcMerkleRoot(block.Transactions)
+	if err != nil {
+		return err
+	}
+	if block.Header.MerkleRoot != root {
+		return fmt.Errorf("side block merkle root mismatch")
+	}
+	if err := consensus.CheckProofOfWork(&block.Header, n.cfg.Params); err != nil {
+		return fmt.Errorf("side block proof of work: %w", err)
+	}
+	return nil
+}
+
+func (n *Node) sideOrMainBlockLocked(hash wire.Hash) (*wire.MsgBlock, bool) {
+	if block, ok := n.cfg.Chain.BlockByHash(hash); ok {
+		return block, true
+	}
+	block, ok := n.sideBlocks[hash]
+	return block, ok
 }
 
 func (n *Node) validateOrphanCandidateLocked(block *wire.MsgBlock) error {

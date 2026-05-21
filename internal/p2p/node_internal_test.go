@@ -6,8 +6,10 @@ import (
 	"time"
 
 	"github.com/Pingancoin/pacd/internal/blockchain"
+	"github.com/Pingancoin/pacd/internal/blockstore"
 	"github.com/Pingancoin/pacd/internal/chaincfg"
 	"github.com/Pingancoin/pacd/internal/mining"
+	"github.com/Pingancoin/pacd/internal/wire"
 )
 
 func TestBanScoreAppliesByHost(t *testing.T) {
@@ -153,5 +155,79 @@ func TestStaleConflictingBlockIsIgnored(t *testing.T) {
 	}
 	if chain.Tip().MustBlockHash() != blockA.MustBlockHash() {
 		t.Fatalf("tip changed after stale conflict: %s", chain.Tip().MustBlockHash())
+	}
+}
+
+func TestLongerSideChainReorganizesAndPersists(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	chain := blockchain.New(params)
+	store := blockstore.New(t.TempDir())
+	node, err := NewNode(Config{
+		Params:  params,
+		Chain:   chain,
+		Store:   store,
+		ChainMu: &sync.Mutex{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blockTime := time.Unix(params.GenesisBlock.Header.Timestamp, 0)
+	for i := 0; i < 2; i++ {
+		blockTime = blockTime.Add(params.TargetTimePerBlock)
+		block, err := mining.MineBlock(chain, []byte("SsimMain"), blockTime, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := chain.AddBlock(block); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mainTip := chain.Tip().MustBlockHash()
+
+	sideChain := blockchain.New(params)
+	sideTime := time.Unix(params.GenesisBlock.Header.Timestamp, 0)
+	sideBlocks := make([]*wire.MsgBlock, 0, 3)
+	for i := 0; i < 3; i++ {
+		sideTime = sideTime.Add(params.TargetTimePerBlock)
+		block, err := mining.MineBlock(sideChain, []byte("SsimSide"), sideTime, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sideBlocks = append(sideBlocks, block)
+		if err := sideChain.AddBlock(block); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for i, block := range sideBlocks {
+		connected, connectedBlocks, err := node.connectBlock(block)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i < 2 && connected {
+			t.Fatalf("side block %d reorganized before becoming longer", i)
+		}
+		if i == 2 {
+			if !connected || len(connectedBlocks) != 3 {
+				t.Fatalf("longer side chain did not reorganize: connected=%t blocks=%d", connected, len(connectedBlocks))
+			}
+		}
+	}
+	if chain.Height() != 3 || chain.Tip().MustBlockHash() != sideBlocks[2].MustBlockHash() {
+		t.Fatalf("unexpected reorg tip height=%d hash=%s", chain.Height(), chain.Tip().MustBlockHash())
+	}
+	if chain.Tip().MustBlockHash() == mainTip {
+		t.Fatal("main tip did not change after reorg")
+	}
+	if len(node.sideBlocks) != 0 {
+		t.Fatalf("side cache not pruned: %d", len(node.sideBlocks))
+	}
+	loaded, err := store.Load(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Height() != 3 || loaded.Tip().MustBlockHash() != sideBlocks[2].MustBlockHash() {
+		t.Fatalf("persisted reorg height=%d hash=%s", loaded.Height(), loaded.Tip().MustBlockHash())
 	}
 }

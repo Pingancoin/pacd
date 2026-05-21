@@ -108,9 +108,69 @@ func (c *Chain) ValidateBlock(block *wire.MsgBlock) error {
 	return err
 }
 
+func (c *Chain) ReorganizedBlocks(candidate []*wire.MsgBlock) ([]*wire.MsgBlock, bool, error) {
+	reorganized, ok, err := c.reorganizeCandidate(candidate)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	return reorganized.blocks, true, nil
+}
+
+func (c *Chain) Reorganize(candidate []*wire.MsgBlock) (bool, error) {
+	reorganized, ok, err := c.reorganizeCandidate(candidate)
+	if err != nil || !ok {
+		return ok, err
+	}
+	c.blocks = reorganized.blocks
+	c.utxos = reorganized.utxos
+	return true, nil
+}
+
 func (c *Chain) CalcFees(txs []*wire.MsgTx) (int64, error) {
 	fees, _, err := c.validateRegularTransactions(txs, cloneUTXOSet(c.utxos), c.Height()+1)
 	return fees, err
+}
+
+func (c *Chain) reorganizeCandidate(candidate []*wire.MsgBlock) (*Chain, bool, error) {
+	if len(candidate) == 0 {
+		return nil, false, nil
+	}
+	first := candidate[0]
+	if first == nil {
+		return nil, false, fmt.Errorf("candidate block 0 is nil")
+	}
+	forkBlock, ok := c.BlockByHash(first.Header.PrevBlock)
+	if !ok {
+		return nil, false, fmt.Errorf("candidate fork point %s is unknown", first.Header.PrevBlock)
+	}
+	forkHeight := forkBlock.Header.Height
+	if first.Header.Height != forkHeight+1 {
+		return nil, false, fmt.Errorf("candidate starts at height %d, expected %d", first.Header.Height, forkHeight+1)
+	}
+	candidateTipHeight := candidate[len(candidate)-1].Header.Height
+	if candidateTipHeight <= c.Height() {
+		return nil, false, nil
+	}
+
+	reorganized := New(c.params)
+	for height := uint32(1); height <= forkHeight; height++ {
+		block, ok := c.BlockByHeight(height)
+		if !ok {
+			return nil, false, fmt.Errorf("missing main-chain block at height %d", height)
+		}
+		if err := reorganized.AddBlock(block); err != nil {
+			return nil, false, fmt.Errorf("replay main-chain block %d: %w", height, err)
+		}
+	}
+	for i, block := range candidate {
+		if block == nil {
+			return nil, false, fmt.Errorf("candidate block %d is nil", i)
+		}
+		if err := reorganized.AddBlock(block); err != nil {
+			return nil, false, fmt.Errorf("candidate block height %d: %w", block.Header.Height, err)
+		}
+	}
+	return reorganized, true, nil
 }
 
 func (c *Chain) validateBlock(block *wire.MsgBlock) (map[wire.OutPoint]*UTXOEntry, error) {

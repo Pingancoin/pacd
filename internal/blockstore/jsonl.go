@@ -155,6 +155,47 @@ func (s *Store) Append(block *wire.MsgBlock) error {
 	return file.Sync()
 }
 
+func (s *Store) Replace(blocks []*wire.MsgBlock) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+		return err
+	}
+	tmp := s.path + ".rewrite"
+	file, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	for _, block := range blocks {
+		if block == nil || block.Header.Height == 0 {
+			continue
+		}
+		record, err := newBlockRecord(block)
+		if err != nil {
+			_ = file.Close()
+			return err
+		}
+		encoded, err := json.Marshal(record)
+		if err != nil {
+			_ = file.Close()
+			return err
+		}
+		if _, err := file.Write(append(encoded, '\n')); err != nil {
+			_ = file.Close()
+			return err
+		}
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.path)
+}
+
 func (s *Store) backupCorruptStore() (string, error) {
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return "", err

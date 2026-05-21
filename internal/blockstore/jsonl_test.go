@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Pingancoin/pacd/internal/blockchain"
 	"github.com/Pingancoin/pacd/internal/blockstore"
 	"github.com/Pingancoin/pacd/internal/chaincfg"
 	"github.com/Pingancoin/pacd/internal/mining"
@@ -126,6 +127,53 @@ func TestRepairCanTruncateFullyCorruptStore(t *testing.T) {
 	}
 	if info.Size() != 0 {
 		t.Fatalf("store size = %d, want 0", info.Size())
+	}
+}
+
+func TestStoreReplace(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	store := blockstore.New(t.TempDir())
+	chain := blockchain.New(params)
+	blockTime := time.Unix(params.GenesisBlock.Header.Timestamp, 0)
+	for i := 0; i < 2; i++ {
+		blockTime = blockTime.Add(params.TargetTimePerBlock)
+		block, err := mining.MineBlock(chain, []byte("SsimMiner"), blockTime, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := chain.AddBlock(block); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Replace(chain.Blocks()); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Height() != 2 || loaded.Tip().MustBlockHash() != chain.Tip().MustBlockHash() {
+		t.Fatalf("loaded replacement height=%d hash=%s", loaded.Height(), loaded.Tip().MustBlockHash())
+	}
+
+	sideChain := blockchain.New(params)
+	blockTime = time.Unix(params.GenesisBlock.Header.Timestamp, 0).Add(params.TargetTimePerBlock)
+	sideBlock, err := mining.MineBlock(sideChain, []byte("SsimSide"), blockTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sideChain.AddBlock(sideBlock); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Replace(sideChain.Blocks()); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = store.Load(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Height() != 1 || loaded.Tip().MustBlockHash() != sideBlock.MustBlockHash() {
+		t.Fatalf("loaded rewritten height=%d hash=%s", loaded.Height(), loaded.Tip().MustBlockHash())
 	}
 }
 
