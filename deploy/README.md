@@ -93,4 +93,7 @@ sudo systemctl status pacd-mainnet
 - `launch-check` is intentionally strict about frozen mainnet consensus values
 - `systemd` template uses a per-service data directory and local-only RPC by default
 - nginx template shows a token-injecting `/rpc/` proxy for wallet/explorer use
+- if startup reports a corrupt `blocks.jsonl`, stop the service and run once
+  with `--repairstore`; pacd will backup the original file and truncate to the
+  last fully validated block
 - add reverse proxy, metrics, and log shipping separately; this directory is the first deployment baseline, not the final ops stack

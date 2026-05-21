@@ -51,6 +51,7 @@ func main() {
 	quiet := flag.Bool("quiet", false, "only print final mining summary")
 	dataDir := flag.String("datadir", defaultDataDir(), "base directory for local chain data")
 	reset := flag.Bool("reset", false, "delete existing simnet block data before starting")
+	repairStore := flag.Bool("repairstore", false, "backup and truncate corrupt block data to the last valid block before starting")
 	rpc := flag.Bool("rpc", false, "start the local read-only HTTP RPC server")
 	rpcListen := flag.String("rpclisten", "127.0.0.1:9509", "HTTP RPC listen address")
 	rpcToken := flag.String("rpctoken", os.Getenv("PACD_RPC_TOKEN"), "optional bearer token required for every HTTP RPC request")
@@ -77,9 +78,21 @@ func main() {
 			exit(err)
 		}
 	}
-	chain, err := store.Load(params)
-	if err != nil {
-		exit(err)
+	var chain *blockchain.Chain
+	if *repairStore {
+		var report blockstore.RepairReport
+		chain, report, err = store.Repair(params)
+		if err != nil {
+			exit(err)
+		}
+		if report.Repaired {
+			fmt.Printf("block store repaired: truncated_at=%d backup=%s reason=%s\n", report.TruncatedAt, report.BackupPath, report.Reason)
+		}
+	} else {
+		chain, err = store.Load(params)
+		if err != nil {
+			exit(err)
+		}
 	}
 
 	if *mineTo == "" {
