@@ -34,7 +34,6 @@ apply in their own jurisdiction. Users act at their own risk.
 | Coinbase split | 95% miner, 5% project development multisig |
 | First normal block split | 16.07462662 PAC miner / 0.84603299 PAC project |
 | Coinbase maturity | 100 blocks on mainnet/testnet, 2 blocks on simnet |
-| Mainnet DNS seeds | `server1.pingancoin.org`, `server2.pingancoin.org`, `server3.pingancoin.org`, `server4.pingancoin.org` |
 | Premine | 0 |
 | Genesis time | 2026-06-01 00:00:00 UTC |
 | Genesis message | `Pingancoin PAC genesis: pure PoW, no premine, BLAKE-256 r14, 2026-06-01` |
