@@ -1254,6 +1254,9 @@ func normalizeAddr(addr string) string {
 	if host == "" || port == "" || port == "0" {
 		return ""
 	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		return ""
+	}
 	return net.JoinHostPort(host, port)
 }
 
