@@ -53,7 +53,7 @@ func main() {
 	reset := flag.Bool("reset", false, "delete existing simnet block data before starting")
 	rpc := flag.Bool("rpc", false, "start the local read-only HTTP RPC server")
 	rpcListen := flag.String("rpclisten", "127.0.0.1:9509", "HTTP RPC listen address")
-	rpcToken := flag.String("rpctoken", "", "optional bearer token required for every HTTP RPC request")
+	rpcToken := flag.String("rpctoken", os.Getenv("PACD_RPC_TOKEN"), "optional bearer token required for every HTTP RPC request")
 	allowPublicRPC := flag.Bool("allowpublicrpc", false, "allow mainnet RPC on a non-loopback interface without --rpctoken")
 	p2pEnabled := flag.Bool("p2p", false, "start the P2P listener and peer manager")
 	p2pListen := flag.String("listen", "", "P2P listen address; defaults to 127.0.0.1:<network default port> when --p2p is set")

@@ -34,6 +34,14 @@ Recommended exposure:
 
 - P2P: public on seed/full-node servers
 - RPC: bind to `127.0.0.1` unless a reverse proxy or private network is intentionally exposing it
+- RPC auth: set `PACD_RPC_TOKEN` for any RPC service reachable outside the local host or a trusted private network
+
+`pacd` refuses unauthenticated mainnet RPC on a non-loopback listen address
+unless `--allowpublicrpc` is explicitly provided. Prefer keeping `PACD_RPC_LISTEN`
+on `127.0.0.1:9509` and exposing only the needed public route through nginx.
+If nginx fronts a token-protected local RPC, configure nginx to inject the
+internal `Authorization: Bearer <token>` header and keep the token out of public
+client configuration.
 
 ## Install
 
@@ -51,6 +59,8 @@ sudo chown -R pacd:pacd /var/lib/pacd
    - [pacd-mainnet.env.example](/Users/fanye/Documents/pac/deploy/pacd-mainnet.env.example)
 
 4. Adjust `/etc/pingancoin/pacd-mainnet.env`
+   - leave `PACD_RPC_LISTEN=127.0.0.1:9509` for normal deployments
+   - set `PACD_RPC_TOKEN` when a reverse proxy or private service talks to RPC
 5. Validate consensus readiness:
 
 ```bash
@@ -73,11 +83,12 @@ sudo systemctl status pacd-mainnet
 - DNS for `server1..server4.pingancoin.org` resolves correctly
 - P2P port `9508/tcp` reachable from the public internet on seed nodes
 - RPC port `9509/tcp` bound privately unless intentionally proxied
+- proxied RPC uses an internal bearer token or stays on a trusted private network
 - `scripts/mainnet-release-check.sh` passes on the release commit
 - release binaries built from a clean git tree
 
 ## Notes
 
-- `launch-check` is intentionally strict about the placeholder project payout script
+- `launch-check` is intentionally strict about frozen mainnet consensus values
 - `systemd` template uses a per-service data directory and local-only RPC by default
 - add reverse proxy, metrics, and log shipping separately; this directory is the first deployment baseline, not the final ops stack
