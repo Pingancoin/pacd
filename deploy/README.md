@@ -16,11 +16,8 @@ Recommended first-pass mainnet roles:
    - public P2P
 3. `server3.pingancoin.org`
    - public `pacd`
-   - wallet / pacdata upstream RPC
-   - public P2P
-4. `server4.pingancoin.org`
-   - public `pacd`
    - DNS seed
+   - wallet / pacdata upstream RPC
    - public P2P
 
 Keep mining pool and wallet-facing services on separate hosts where possible.
@@ -81,7 +78,7 @@ sudo systemctl status pacd-mainnet
 
 - final 3-of-5 project payout script inserted into mainnet params
 - `pacd launch-check --network mainnet` returns ready
-- DNS for `server1..server4.pingancoin.org` resolves correctly
+- DNS for `server1..server3.pingancoin.org` resolves correctly
 - P2P port `9508/tcp` reachable from the public internet on seed nodes
 - RPC port `9509/tcp` bound privately unless intentionally proxied
 - proxied RPC uses an internal bearer token or stays on a trusted private network

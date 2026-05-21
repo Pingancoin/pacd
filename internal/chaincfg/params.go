@@ -59,7 +59,6 @@ func MainNetParams() *Params {
 		"server1.pingancoin.org",
 		"server2.pingancoin.org",
 		"server3.pingancoin.org",
-		"server4.pingancoin.org",
 	}
 	params.ProjectPayoutScript = append([]byte(nil), MainNetProjectPayoutScript...)
 	return params

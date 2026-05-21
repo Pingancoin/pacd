@@ -441,7 +441,6 @@ func buildLaunchCheckReport(params *chaincfg.Params) launchCheckReport {
 			"server1.pingancoin.org",
 			"server2.pingancoin.org",
 			"server3.pingancoin.org",
-			"server4.pingancoin.org",
 		}
 		for _, seed := range wantSeeds {
 			if !containsString(params.DNSSeeds, seed) {
