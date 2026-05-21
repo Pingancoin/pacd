@@ -1,11 +1,23 @@
 # Pingancoin `pacd`
 
-`pacd` is the first minimal chain-core milestone for Pingancoin / PAC.
+`pacd` is the core node implementation for Pingancoin / PAC.
 
-The current repository is intentionally small: it establishes the PAC
-consensus constants, BLAKE-256 proof-of-work hash path, block subsidy schedule,
-95/5 coinbase split, and pure-PoW block validation before wallet, explorer,
-pool, and full P2P/RPC surfaces are added.
+The current repository establishes the PAC consensus constants, BLAKE-256
+proof-of-work hash path, block subsidy schedule, 95/5 coinbase split, pure-PoW
+validation, local RPC, and P2P synchronization foundation.
+
+## Legal Notice
+
+Pingancoin and related software are provided for technical research, protocol
+experimentation, and open-source software development only. This project does
+not provide investment advice, financial advice, trading advice, or any promise
+of token value, liquidity, exchange listing, or future profit.
+
+The project maintainer does not conduct exchange-listing activities on behalf of
+users and does not authorize anyone to market PAC as an investment product.
+Anyone who downloads, runs, mines, transfers, or otherwise uses this software is
+responsible for understanding and complying with the laws and regulations that
+apply in their own jurisdiction. Users act at their own risk.
 
 ## Consensus Draft
 
@@ -73,14 +85,11 @@ go run ./cmd/pacd address multisig --network mainnet --required 3 \
   --pubkey <pubkey4-hex> --pubkey <pubkey5-hex>
 ```
 
-After the final redeem script is chosen, verify the mainnet consensus payout:
+Verify the frozen mainnet project payout script:
 
 ```bash
 go run ./cmd/pacd address validate-project --redeemscript <redeem-script-hex>
 ```
-
-Mainnet launch requires replacing the placeholder project payout script with
-the final 3-of-5 multisig script generated from the project's five public keys.
 
 Check whether the current mainnet constants are actually launch-ready:
 
@@ -170,9 +179,8 @@ go run ./cmd/pacd launch-check --network mainnet
 ./scripts/mainnet-release-check.sh
 ```
 
-`launch-check` is expected to fail until the placeholder mainnet project payout
-script is replaced with the final 3-of-5 multisig output script. That failure
-is intentional and acts as a release blocker.
+`launch-check` should report the frozen mainnet consensus constants, including
+the 3-of-5 project development multisig payout script.
 
 ## Supply Note
 
