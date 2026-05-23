@@ -57,7 +57,7 @@ func run(command string, args []string) error {
 
 func info(args []string) error {
 	flags := newFlagSet("info")
-	network := flags.String("network", "simnet", "network to use: mainnet, testnet, simnet")
+	network := flags.String("network", "simnet", "network to use: mainnet, stagenet, testnet, simnet")
 	walletDir := flags.String("walletdir", wallet.DefaultDir(), "base wallet directory")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -93,7 +93,7 @@ func walletPathFromFlags(network string, walletDir string) (*chaincfg.Params, st
 
 func create(args []string) error {
 	flags := newFlagSet("create")
-	network := flags.String("network", "simnet", "network to use: mainnet, testnet, simnet")
+	network := flags.String("network", "simnet", "network to use: mainnet, stagenet, testnet, simnet")
 	walletDir := flags.String("walletdir", wallet.DefaultDir(), "base wallet directory")
 	passphrase := flags.String("passphrase", "", "wallet encryption passphrase; can also use PACWALLET_PASSPHRASE")
 	if err := flags.Parse(args); err != nil {
@@ -126,7 +126,7 @@ func create(args []string) error {
 
 func newAddress(args []string) error {
 	flags := newFlagSet("newaddress")
-	network := flags.String("network", "simnet", "network to use: mainnet, testnet, simnet")
+	network := flags.String("network", "simnet", "network to use: mainnet, stagenet, testnet, simnet")
 	walletDir := flags.String("walletdir", wallet.DefaultDir(), "base wallet directory")
 	label := flags.String("label", "", "address label")
 	passphrase := flags.String("passphrase", "", "wallet passphrase; can also use PACWALLET_PASSPHRASE")
@@ -155,7 +155,7 @@ func newAddress(args []string) error {
 
 func encryptWallet(args []string) error {
 	flags := newFlagSet("encrypt")
-	network := flags.String("network", "simnet", "network to use: mainnet, testnet, simnet")
+	network := flags.String("network", "simnet", "network to use: mainnet, stagenet, testnet, simnet")
 	walletDir := flags.String("walletdir", wallet.DefaultDir(), "base wallet directory")
 	passphrase := flags.String("passphrase", "", "new wallet passphrase; can also use PACWALLET_PASSPHRASE")
 	if err := flags.Parse(args); err != nil {
@@ -182,7 +182,7 @@ func encryptWallet(args []string) error {
 
 func changePassphrase(args []string) error {
 	flags := newFlagSet("changepassphrase")
-	network := flags.String("network", "simnet", "network to use: mainnet, testnet, simnet")
+	network := flags.String("network", "simnet", "network to use: mainnet, stagenet, testnet, simnet")
 	walletDir := flags.String("walletdir", wallet.DefaultDir(), "base wallet directory")
 	oldPassphrase := flags.String("old-passphrase", "", "old wallet passphrase; can also use PACWALLET_OLD_PASSPHRASE")
 	newPassphrase := flags.String("new-passphrase", "", "new wallet passphrase; can also use PACWALLET_PASSPHRASE")
@@ -210,7 +210,7 @@ func changePassphrase(args []string) error {
 
 func importPrivKey(args []string) error {
 	flags := newFlagSet("importprivkey")
-	network := flags.String("network", "simnet", "network to use: mainnet, testnet, simnet")
+	network := flags.String("network", "simnet", "network to use: mainnet, stagenet, testnet, simnet")
 	walletDir := flags.String("walletdir", wallet.DefaultDir(), "base wallet directory")
 	label := flags.String("label", "", "address label")
 	privKeyHex := flags.String("privkey", "", "32-byte private key hex")
@@ -243,7 +243,7 @@ func importPrivKey(args []string) error {
 
 func exportPrivKey(args []string) error {
 	flags := newFlagSet("exportprivkey")
-	network := flags.String("network", "simnet", "network to use: mainnet, testnet, simnet")
+	network := flags.String("network", "simnet", "network to use: mainnet, stagenet, testnet, simnet")
 	walletDir := flags.String("walletdir", wallet.DefaultDir(), "base wallet directory")
 	address := flags.String("address", "", "wallet address to export")
 	passphrase := flags.String("passphrase", "", "wallet passphrase; can also use PACWALLET_PASSPHRASE")
@@ -273,7 +273,7 @@ func exportPrivKey(args []string) error {
 
 func list(args []string) error {
 	flags := newFlagSet("list")
-	network := flags.String("network", "simnet", "network to use: mainnet, testnet, simnet")
+	network := flags.String("network", "simnet", "network to use: mainnet, stagenet, testnet, simnet")
 	walletDir := flags.String("walletdir", wallet.DefaultDir(), "base wallet directory")
 	showPrivate := flags.Bool("show-private", false, "show private keys")
 	passphrase := flags.String("passphrase", "", "wallet passphrase; can also use PACWALLET_PASSPHRASE")
@@ -296,7 +296,7 @@ func list(args []string) error {
 
 func pubKeys(args []string) error {
 	flags := newFlagSet("pubkeys")
-	network := flags.String("network", "simnet", "network to use: mainnet, testnet, simnet")
+	network := flags.String("network", "simnet", "network to use: mainnet, stagenet, testnet, simnet")
 	walletDir := flags.String("walletdir", wallet.DefaultDir(), "base wallet directory")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -317,7 +317,7 @@ func pubKeys(args []string) error {
 
 func balance(args []string) error {
 	flags := newFlagSet("balance")
-	network := flags.String("network", "simnet", "network to use: mainnet, testnet, simnet")
+	network := flags.String("network", "simnet", "network to use: mainnet, stagenet, testnet, simnet")
 	walletDir := flags.String("walletdir", wallet.DefaultDir(), "base wallet directory")
 	rpcURL := flags.String("rpc", "http://127.0.0.1:9509", "pacd RPC URL")
 	if err := flags.Parse(args); err != nil {
@@ -351,7 +351,7 @@ func balance(args []string) error {
 
 func history(args []string) error {
 	flags := newFlagSet("history")
-	network := flags.String("network", "simnet", "network to use: mainnet, testnet, simnet")
+	network := flags.String("network", "simnet", "network to use: mainnet, stagenet, testnet, simnet")
 	walletDir := flags.String("walletdir", wallet.DefaultDir(), "base wallet directory")
 	rpcURL := flags.String("rpc", "http://127.0.0.1:9509", "pacd RPC URL")
 	if err := flags.Parse(args); err != nil {
@@ -387,7 +387,7 @@ func history(args []string) error {
 
 func draftTx(args []string) error {
 	flags := newFlagSet("drafttx")
-	network := flags.String("network", "simnet", "network to use: mainnet, testnet, simnet")
+	network := flags.String("network", "simnet", "network to use: mainnet, stagenet, testnet, simnet")
 	walletDir := flags.String("walletdir", wallet.DefaultDir(), "base wallet directory")
 	rpcURL := flags.String("rpc", "http://127.0.0.1:9509", "pacd RPC URL")
 	to := flags.String("to", "", "destination address")
@@ -456,7 +456,7 @@ func draftTx(args []string) error {
 
 func send(args []string) error {
 	flags := newFlagSet("send")
-	network := flags.String("network", "simnet", "network to use: mainnet, testnet, simnet")
+	network := flags.String("network", "simnet", "network to use: mainnet, stagenet, testnet, simnet")
 	walletDir := flags.String("walletdir", wallet.DefaultDir(), "base wallet directory")
 	rpcURL := flags.String("rpc", "http://127.0.0.1:9509", "pacd RPC URL")
 	to := flags.String("to", "", "destination address")
@@ -521,6 +521,8 @@ func selectParams(network string) (*chaincfg.Params, error) {
 	switch network {
 	case "mainnet":
 		return chaincfg.MainNetParams(), nil
+	case "stagenet":
+		return chaincfg.StageNetParams(), nil
 	case "testnet":
 		return chaincfg.TestNetParams(), nil
 	case "simnet":

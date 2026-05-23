@@ -36,6 +36,7 @@ apply in their own jurisdiction. Users act at their own risk.
 | Coinbase maturity | 100 blocks on mainnet/testnet, 2 blocks on simnet |
 | Premine | 0 |
 | Genesis time | 2026-06-01 00:00:00 UTC |
+| Mainnet mining opens | 2026-06-01 00:00:00 UTC |
 | Genesis message | `Pingancoin PAC genesis: pure PoW, no premine, BLAKE-256 r14, 2026-06-01` |
 
 ## Layout
@@ -62,6 +63,17 @@ Use Go 1.25+:
 go test ./...
 go run ./cmd/pacd --network simnet --printparams
 go run ./cmd/pacd --network simnet --mine PsimMiner --blocks 3
+```
+
+Mainnet is launch-locked until `2026-06-01T00:00:00Z`. Before that time,
+`/getmininginfo` reports the countdown while `/getblocktemplate`,
+`/submitblock`, and P2P block/header acceptance reject normal blocks. Use
+`stagenet` for end-to-end pool and explorer rehearsals without touching
+mainnet:
+
+```bash
+go run ./cmd/pacd --network stagenet --printparams
+go run ./cmd/pacd --network stagenet --mine GstageMiner --blocks 3
 ```
 
 Generate a mainnet `P...` address from a compressed public key:

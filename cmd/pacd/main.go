@@ -42,7 +42,7 @@ func main() {
 		return
 	}
 
-	network := flag.String("network", "simnet", "network to use: mainnet, testnet, simnet")
+	network := flag.String("network", "simnet", "network to use: mainnet, stagenet, testnet, simnet")
 	printParams := flag.Bool("printparams", false, "print consensus parameters")
 	mineTo := flag.String("mine", "", "mine to a miner payout script/address label")
 	blocks := flag.Int("blocks", 1, "number of blocks to mine")
@@ -73,7 +73,7 @@ func main() {
 	}
 
 	store := blockstore.New(filepath.Join(*dataDir, params.Name))
-	if *network == "simnet" && *reset {
+	if (*network == "simnet" || *network == "stagenet") && *reset {
 		if err := os.Remove(store.Path()); err != nil && !os.IsNotExist(err) {
 			exit(err)
 		}
@@ -111,8 +111,8 @@ func main() {
 	if *blocks <= 0 {
 		exit(fmt.Errorf("blocks must be positive"))
 	}
-	if *network != "simnet" {
-		exit(fmt.Errorf("local mining is currently intended for simnet only"))
+	if *network != "simnet" && *network != "stagenet" {
+		exit(fmt.Errorf("local mining is currently intended for simnet or stagenet only"))
 	}
 	if *maxNonce > uint(wire.MaxUint32) {
 		exit(fmt.Errorf("maxnonce must be <= %d", wire.MaxUint32))
@@ -177,6 +177,8 @@ type launchCheckReport struct {
 	Ready                     bool     `json:"ready"`
 	AddressPrefix             string   `json:"address_prefix"`
 	DefaultPort               string   `json:"default_port"`
+	MiningStartTime           string   `json:"mining_start_time,omitempty"`
+	MiningOpen                bool     `json:"mining_open"`
 	TargetTimePerBlock        string   `json:"target_time_per_block"`
 	ASERTHalfLife             string   `json:"asert_half_life"`
 	BaseSubsidy               string   `json:"base_subsidy"`
@@ -193,7 +195,7 @@ type launchCheckReport struct {
 
 func runLaunchCheckCommand(args []string) error {
 	flags := flag.NewFlagSet("pacd launch-check", flag.ContinueOnError)
-	network := flags.String("network", "mainnet", "network to use: mainnet, testnet, simnet")
+	network := flags.String("network", "mainnet", "network to use: mainnet, stagenet, testnet, simnet")
 	jsonOut := flags.Bool("json", false, "print launch check report as JSON")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -215,7 +217,7 @@ func runLaunchCheckCommand(args []string) error {
 
 func runPubKeyAddressCommand(args []string) error {
 	flags := flag.NewFlagSet("pacd address pubkey", flag.ContinueOnError)
-	network := flags.String("network", "mainnet", "network to use: mainnet, testnet, simnet")
+	network := flags.String("network", "mainnet", "network to use: mainnet, stagenet, testnet, simnet")
 	pubKeyHex := flags.String("pubkey", "", "compressed or uncompressed public key hex")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -242,7 +244,7 @@ func runPubKeyAddressCommand(args []string) error {
 func runMultiSigAddressCommand(args []string) error {
 	var pubKeys pubKeyList
 	flags := flag.NewFlagSet("pacd address multisig", flag.ContinueOnError)
-	network := flags.String("network", "mainnet", "network to use: mainnet, testnet, simnet")
+	network := flags.String("network", "mainnet", "network to use: mainnet, stagenet, testnet, simnet")
 	required := flags.Int("required", 3, "required signatures")
 	flags.Var(&pubKeys, "pubkey", "compressed or uncompressed public key hex; repeat for each key")
 	if err := flags.Parse(args); err != nil {
@@ -346,6 +348,8 @@ func selectParams(network string) (*chaincfg.Params, error) {
 	switch network {
 	case "mainnet":
 		return chaincfg.MainNetParams(), nil
+	case "stagenet":
+		return chaincfg.StageNetParams(), nil
 	case "testnet":
 		return chaincfg.TestNetParams(), nil
 	case "simnet":
@@ -362,6 +366,9 @@ func printConsensusParams(params *chaincfg.Params) {
 	fmt.Printf("address prefix: %s...\n", params.AddressPrefix)
 	fmt.Printf("genesis hash: %s\n", params.GenesisHash)
 	fmt.Printf("genesis time: %s\n", time.Unix(params.GenesisBlock.Header.Timestamp, 0).UTC().Format(time.RFC3339))
+	if params.MiningStartTime > 0 {
+		fmt.Printf("mining start time: %s\n", chaincfg.MiningStartTimeText(params))
+	}
 	fmt.Printf("target block time: %s\n", params.TargetTimePerBlock)
 	fmt.Printf("pow limit bits: %08x\n", params.PowLimitBits)
 	fmt.Printf("genesis bits: %08x\n", params.GenesisBits)
@@ -389,6 +396,8 @@ func buildLaunchCheckReport(params *chaincfg.Params) launchCheckReport {
 		Ready:                     true,
 		AddressPrefix:             params.AddressPrefix,
 		DefaultPort:               params.DefaultPort,
+		MiningStartTime:           chaincfg.MiningStartTimeText(params),
+		MiningOpen:                chaincfg.MiningOpen(params, time.Now().UTC()),
 		TargetTimePerBlock:        params.TargetTimePerBlock.String(),
 		ASERTHalfLife:             params.ASERTHalfLife.String(),
 		BaseSubsidy:               formatPAC(params.BaseSubsidy),
@@ -461,6 +470,10 @@ func printLaunchCheck(report launchCheckReport) {
 	fmt.Printf("launch-check network=%s ready=%t\n", report.Network, report.Ready)
 	fmt.Printf("address prefix: %s...\n", report.AddressPrefix)
 	fmt.Printf("default port: %s\n", report.DefaultPort)
+	if report.MiningStartTime != "" {
+		fmt.Printf("mining start time: %s\n", report.MiningStartTime)
+		fmt.Printf("mining open: %t\n", report.MiningOpen)
+	}
 	fmt.Printf("target block time: %s\n", report.TargetTimePerBlock)
 	fmt.Printf("asert half life: %s\n", report.ASERTHalfLife)
 	fmt.Printf("base subsidy: %s PAC\n", report.BaseSubsidy)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/Pingancoin/pacd/internal/chaincfg"
 	"github.com/Pingancoin/pacd/internal/consensus"
@@ -181,6 +182,9 @@ func (c *Chain) validateBlock(block *wire.MsgBlock) (map[wire.OutPoint]*UTXOEntr
 	expectedHeight := c.Height() + 1
 	if block.Header.Height != expectedHeight {
 		return nil, fmt.Errorf("height %d does not extend tip %d", block.Header.Height, c.Height())
+	}
+	if !chaincfg.MiningOpen(c.params, time.Now().UTC()) {
+		return nil, fmt.Errorf("%s mining opens at %s", c.params.Name, chaincfg.MiningStartTimeText(c.params))
 	}
 
 	tipHash := c.Tip().MustBlockHash()

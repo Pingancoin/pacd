@@ -32,6 +32,20 @@ func TestMineAndValidateSimnetBlock(t *testing.T) {
 	}
 }
 
+func TestValidateBlockBeforeMiningStart(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	params.MiningStartTime = time.Now().UTC().Add(time.Hour).Unix()
+	chain := blockchain.New(params)
+	blockTime := time.Unix(params.GenesisBlock.Header.Timestamp, 0).Add(params.TargetTimePerBlock)
+	block, err := mining.MineBlock(chain, []byte("SsimMiner"), blockTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.ValidateBlock(block); err == nil {
+		t.Fatal("expected block validation to wait for mining start time")
+	}
+}
+
 func TestMineAndValidateOneHundredSimnetBlocks(t *testing.T) {
 	params := chaincfg.SimNetParams()
 	chain := blockchain.New(params)

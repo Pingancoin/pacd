@@ -18,6 +18,12 @@ const (
 	MainNetProjectRedeemScriptHex = "532102239e7696e4c9386dfd9a9e4896aff47118aac9f2dffd17d62ab85b78ad0ae0d521024a60aa647fcae613dffb1ee80997e51524fb6cd0086c87bc4385eb4db147568721021fc64f5d87aba44c08153313c1a3c2590e4fd3f346ab68b0eca7407658471ac42103a7b2cad4d103a4270fd23dd843378eeaa98c8f98e7559cc319b9d9e0aece80c22102665657864e3e43aa90db3919e2c4b2b1650d43631d4a950fbfade999f1b4561355ae"
 )
 
+var (
+	MainNetMiningStartTime = time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	defaultGenesisTime     = time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	stageNetGenesisTime    = time.Date(2026, 5, 23, 0, 0, 0, 0, time.UTC)
+)
+
 var MainNetProjectPayoutScript = []byte{
 	0xa9, 0x14, 0xd9, 0x64, 0x6f, 0x55, 0xfc, 0x72,
 	0xd3, 0x61, 0x2a, 0x79, 0x10, 0xfa, 0x86, 0x1c,
@@ -50,17 +56,27 @@ type Params struct {
 	ProjectMultisigM     int
 	ProjectMultisigN     int
 	ProjectPayoutScript  []byte
+	MiningStartTime      int64
 }
 
 func MainNetParams() *Params {
 	params := commonParams("mainnet", "P", "9508", 0xfacec001, 0x37, 0x38, 0x1d00ffff, 0x1b01ffff, 224)
 	params.CoinbaseMaturity = 100
+	params.MiningStartTime = MainNetMiningStartTime.Unix()
 	params.DNSSeeds = []string{
 		"server1.pingancoin.org",
 		"server2.pingancoin.org",
 		"server3.pingancoin.org",
 	}
 	params.ProjectPayoutScript = append([]byte(nil), MainNetProjectPayoutScript...)
+	return params
+}
+
+func StageNetParams() *Params {
+	params := commonParamsWithGenesisTime("stagenet", "G", "39508", 0xfacec551, 0x43, 0x44, 0x207fffff, 0x207fffff, 255, stageNetGenesisTime)
+	params.ASERTHalfLife = 20 * time.Minute
+	params.CoinbaseMaturity = 10
+	params.ProjectPayoutScript = []byte("PAC_STAGENET_3_OF_5_PROJECT_MULTISIG_SCRIPT")
 	return params
 }
 
@@ -84,8 +100,12 @@ func SimNetParams() *Params {
 }
 
 func commonParams(name, addressPrefix, defaultPort string, networkMagic uint32, pubKeyHashAddrID, scriptHashAddrID byte, powLimitBits, genesisBits uint32, powLimitShift uint) *Params {
+	return commonParamsWithGenesisTime(name, addressPrefix, defaultPort, networkMagic, pubKeyHashAddrID, scriptHashAddrID, powLimitBits, genesisBits, powLimitShift, defaultGenesisTime)
+}
+
+func commonParamsWithGenesisTime(name, addressPrefix, defaultPort string, networkMagic uint32, pubKeyHashAddrID, scriptHashAddrID byte, powLimitBits, genesisBits uint32, powLimitShift uint, genesisTime time.Time) *Params {
 	powLimit := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), powLimitShift), big.NewInt(1))
-	genesisBlock := genesisBlock(genesisBits)
+	genesisBlock := genesisBlock(genesisBits, genesisTime)
 
 	params := &Params{
 		Name:                 name,
@@ -115,7 +135,18 @@ func commonParams(name, addressPrefix, defaultPort string, networkMagic uint32, 
 	return params
 }
 
-func genesisBlock(bits uint32) *wire.MsgBlock {
+func MiningOpen(params *Params, now time.Time) bool {
+	return params.MiningStartTime == 0 || !now.UTC().Before(time.Unix(params.MiningStartTime, 0).UTC())
+}
+
+func MiningStartTimeText(params *Params) string {
+	if params.MiningStartTime == 0 {
+		return ""
+	}
+	return time.Unix(params.MiningStartTime, 0).UTC().Format(time.RFC3339)
+}
+
+func genesisBlock(bits uint32, timestamp time.Time) *wire.MsgBlock {
 	genesisTx := wire.NewCoinbaseTx(0, GenesisMessage, []*wire.TxOut{{
 		Value:    0,
 		PkScript: []byte(GenesisMessage),
@@ -125,7 +156,7 @@ func genesisBlock(bits uint32) *wire.MsgBlock {
 		Header: wire.BlockHeader{
 			Version:   1,
 			PrevBlock: wire.ZeroHash(),
-			Timestamp: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC).Unix(),
+			Timestamp: timestamp.UTC().Unix(),
 			Bits:      bits,
 			Nonce:     0,
 			Height:    0,

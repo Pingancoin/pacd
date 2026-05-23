@@ -386,14 +386,27 @@ func (s *Server) handleGetMiningInfo(w http.ResponseWriter, r *http.Request) {
 	nextHeight := s.chain.Height() + 1
 	nextBits := s.chain.ExpectedBits(nextHeight)
 	miner, project := consensus.CalcBlockOneTimeSplit(int64(nextHeight), params)
+	now := time.Now().UTC()
+	miningOpen := chaincfg.MiningOpen(params, now)
+	timeUntilMining := int64(0)
+	if !miningOpen && params.MiningStartTime > 0 {
+		timeUntilMining = int64(time.Until(time.Unix(params.MiningStartTime, 0).UTC()).Seconds())
+		if timeUntilMining < 0 {
+			timeUntilMining = 0
+		}
+	}
 	writeJSON(w, map[string]any{
-		"network":          params.Name,
-		"blocks":           s.chain.Height(),
-		"bestblockhash":    s.chain.Tip().MustBlockHash().String(),
-		"nextheight":       nextHeight,
-		"nextbits":         fmt.Sprintf("%08x", nextBits),
-		"difficulty":       consensus.DifficultyRatio(nextBits, params).FloatString(4),
-		"targetspacingsec": int64(params.TargetTimePerBlock / time.Second),
+		"network":              params.Name,
+		"blocks":               s.chain.Height(),
+		"bestblockhash":        s.chain.Tip().MustBlockHash().String(),
+		"nextheight":           nextHeight,
+		"nextbits":             fmt.Sprintf("%08x", nextBits),
+		"difficulty":           consensus.DifficultyRatio(nextBits, params).FloatString(4),
+		"targetspacingsec":     int64(params.TargetTimePerBlock / time.Second),
+		"miningopen":           miningOpen,
+		"miningstarttime":      chaincfg.MiningStartTimeText(params),
+		"miningstarttimestamp": params.MiningStartTime,
+		"timeuntilminingsec":   timeUntilMining,
 		"nextsubsidy": map[string]int64{
 			"miner":   miner,
 			"project": project,
@@ -424,6 +437,10 @@ func (s *Server) handleGetBlockTemplate(w http.ResponseWriter, r *http.Request) 
 	defer s.mu.Unlock()
 
 	params := s.chain.Params()
+	if !chaincfg.MiningOpen(params, time.Now().UTC()) {
+		writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("%s mining opens at %s", params.Name, chaincfg.MiningStartTimeText(params)))
+		return
+	}
 	minerScript, err := address.DecodeAddressScript(params, req.Address)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("miner address: %v", err))
@@ -582,6 +599,11 @@ func (s *Server) handleSubmitRawTransaction(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleSubmitBlock(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	params := s.chain.Params()
+	if !chaincfg.MiningOpen(params, time.Now().UTC()) {
+		writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("%s mining opens at %s", params.Name, chaincfg.MiningStartTimeText(params)))
 		return
 	}
 	blockHex, err := readBlockHex(r)

@@ -361,6 +361,28 @@ func TestGetBlockTemplateAndSubmitBlock(t *testing.T) {
 	}
 }
 
+func TestMiningRPCWaitsForMiningStart(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	params.MiningStartTime = time.Now().UTC().Add(time.Hour).Unix()
+	chain := blockchain.New(params)
+	server := rpcserver.New(chain, blockstore.New(t.TempDir()))
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	resp := postJSONStatus(t, httpServer.URL+"/getblocktemplate", map[string]any{
+		"address": "Snot-used-before-launch",
+	})
+	if resp != http.StatusServiceUnavailable {
+		t.Fatalf("getblocktemplate status = %d, want %d", resp, http.StatusServiceUnavailable)
+	}
+	resp = postJSONStatus(t, httpServer.URL+"/submitblock", map[string]any{
+		"blockhex": "00",
+	})
+	if resp != http.StatusServiceUnavailable {
+		t.Fatalf("submitblock status = %d, want %d", resp, http.StatusServiceUnavailable)
+	}
+}
+
 func TestNotifyChainReorganizedRestoresValidDisconnectedTransactions(t *testing.T) {
 	params := chaincfg.SimNetParams()
 	chain := blockchain.New(params)
@@ -533,6 +555,20 @@ func postJSON(t *testing.T, url string, body any, dest any) {
 	if err := json.NewDecoder(resp.Body).Decode(dest); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func postJSONStatus(t *testing.T, url string, body any) int {
+	t.Helper()
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(url, "application/json", bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode
 }
 
 func solveBlock(t *testing.T, block *wire.MsgBlock, params *chaincfg.Params) {

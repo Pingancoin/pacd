@@ -736,6 +736,9 @@ func (n *Node) validateHeaderChain(headers []wire.BlockHeader) ([]wire.Hash, err
 		return nil, nil
 	}
 	expectedHeight := n.cfg.Chain.Height() + 1
+	if len(headers) > 0 && !chaincfg.MiningOpen(n.cfg.Params, time.Now().UTC()) {
+		return nil, fmt.Errorf("%s mining opens at %s", n.cfg.Params.Name, chaincfg.MiningStartTimeText(n.cfg.Params))
+	}
 	prevHash := n.cfg.Chain.Tip().MustBlockHash()
 	prevTime := n.cfg.Chain.Tip().Header.Timestamp
 	hashes := make([]wire.Hash, 0, len(headers))
@@ -1442,6 +1445,9 @@ func (n *Node) validateSideCandidateLocked(block *wire.MsgBlock) error {
 	}
 	if block.Header.Height == 0 {
 		return fmt.Errorf("side block cannot replace genesis")
+	}
+	if !chaincfg.MiningOpen(n.cfg.Params, time.Now().UTC()) {
+		return fmt.Errorf("%s mining opens at %s", n.cfg.Params.Name, chaincfg.MiningStartTimeText(n.cfg.Params))
 	}
 	if block.Header.Height > n.cfg.Chain.Height()+defaultMaxOrphanHeightGap {
 		return fmt.Errorf("side block height %d is too far ahead of tip %d", block.Header.Height, n.cfg.Chain.Height())
