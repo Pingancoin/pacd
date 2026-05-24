@@ -67,14 +67,7 @@ go run ./cmd/pacd --network simnet --mine PsimMiner --blocks 3
 
 Mainnet is launch-locked until `2026-06-01T00:00:00Z`. Before that time,
 `/getmininginfo` reports the countdown while `/getblocktemplate`,
-`/submitblock`, and P2P block/header acceptance reject normal blocks. Use
-`stagenet` for end-to-end pool and explorer rehearsals without touching
-mainnet:
-
-```bash
-go run ./cmd/pacd --network stagenet --printparams
-go run ./cmd/pacd --network stagenet --mine GstageMiner --blocks 3
-```
+`/submitblock`, and P2P block/header acceptance reject normal blocks.
 
 Generate a mainnet `P...` address from a compressed public key:
 

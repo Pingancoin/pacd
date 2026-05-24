@@ -21,7 +21,6 @@ const (
 var (
 	MainNetMiningStartTime = time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	defaultGenesisTime     = time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	stageNetGenesisTime    = time.Date(2026, 5, 23, 0, 0, 0, 0, time.UTC)
 )
 
 var MainNetProjectPayoutScript = []byte{
@@ -69,14 +68,6 @@ func MainNetParams() *Params {
 		"server3.pingancoin.org",
 	}
 	params.ProjectPayoutScript = append([]byte(nil), MainNetProjectPayoutScript...)
-	return params
-}
-
-func StageNetParams() *Params {
-	params := commonParamsWithGenesisTime("stagenet", "G", "39508", 0xfacec551, 0x43, 0x44, 0x207fffff, 0x207fffff, 255, stageNetGenesisTime)
-	params.ASERTHalfLife = 20 * time.Minute
-	params.CoinbaseMaturity = 10
-	params.ProjectPayoutScript = []byte("PAC_STAGENET_3_OF_5_PROJECT_MULTISIG_SCRIPT")
 	return params
 }
 

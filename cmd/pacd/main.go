@@ -42,7 +42,7 @@ func main() {
 		return
 	}
 
-	network := flag.String("network", "simnet", "network to use: mainnet, stagenet, testnet, simnet")
+	network := flag.String("network", "simnet", "network to use: mainnet, testnet, simnet")
 	printParams := flag.Bool("printparams", false, "print consensus parameters")
 	mineTo := flag.String("mine", "", "mine to a miner payout script/address label")
 	blocks := flag.Int("blocks", 1, "number of blocks to mine")
@@ -73,7 +73,7 @@ func main() {
 	}
 
 	store := blockstore.New(filepath.Join(*dataDir, params.Name))
-	if (*network == "simnet" || *network == "stagenet") && *reset {
+	if *network == "simnet" && *reset {
 		if err := os.Remove(store.Path()); err != nil && !os.IsNotExist(err) {
 			exit(err)
 		}
@@ -111,8 +111,8 @@ func main() {
 	if *blocks <= 0 {
 		exit(fmt.Errorf("blocks must be positive"))
 	}
-	if *network != "simnet" && *network != "stagenet" {
-		exit(fmt.Errorf("local mining is currently intended for simnet or stagenet only"))
+	if *network != "simnet" {
+		exit(fmt.Errorf("local mining is currently intended for simnet only"))
 	}
 	if *maxNonce > uint(wire.MaxUint32) {
 		exit(fmt.Errorf("maxnonce must be <= %d", wire.MaxUint32))
@@ -195,7 +195,7 @@ type launchCheckReport struct {
 
 func runLaunchCheckCommand(args []string) error {
 	flags := flag.NewFlagSet("pacd launch-check", flag.ContinueOnError)
-	network := flags.String("network", "mainnet", "network to use: mainnet, stagenet, testnet, simnet")
+	network := flags.String("network", "mainnet", "network to use: mainnet, testnet, simnet")
 	jsonOut := flags.Bool("json", false, "print launch check report as JSON")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -217,7 +217,7 @@ func runLaunchCheckCommand(args []string) error {
 
 func runPubKeyAddressCommand(args []string) error {
 	flags := flag.NewFlagSet("pacd address pubkey", flag.ContinueOnError)
-	network := flags.String("network", "mainnet", "network to use: mainnet, stagenet, testnet, simnet")
+	network := flags.String("network", "mainnet", "network to use: mainnet, testnet, simnet")
 	pubKeyHex := flags.String("pubkey", "", "compressed or uncompressed public key hex")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -244,7 +244,7 @@ func runPubKeyAddressCommand(args []string) error {
 func runMultiSigAddressCommand(args []string) error {
 	var pubKeys pubKeyList
 	flags := flag.NewFlagSet("pacd address multisig", flag.ContinueOnError)
-	network := flags.String("network", "mainnet", "network to use: mainnet, stagenet, testnet, simnet")
+	network := flags.String("network", "mainnet", "network to use: mainnet, testnet, simnet")
 	required := flags.Int("required", 3, "required signatures")
 	flags.Var(&pubKeys, "pubkey", "compressed or uncompressed public key hex; repeat for each key")
 	if err := flags.Parse(args); err != nil {
@@ -348,8 +348,6 @@ func selectParams(network string) (*chaincfg.Params, error) {
 	switch network {
 	case "mainnet":
 		return chaincfg.MainNetParams(), nil
-	case "stagenet":
-		return chaincfg.StageNetParams(), nil
 	case "testnet":
 		return chaincfg.TestNetParams(), nil
 	case "simnet":
