@@ -5,3 +5,5 @@ coverage.out
 *.test
 *.log
 PROJECT_STATUS.md
+AGENTS.md
+.gomodcache/

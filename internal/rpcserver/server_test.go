@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -115,6 +116,38 @@ func TestBearerAuth(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("authorized status = %s, want 200", resp.Status)
+	}
+}
+
+func TestGetStratumInfo(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	chain := blockchain.New(params)
+	server := rpcserver.New(chain, blockstore.New(t.TempDir()))
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	var disabled struct {
+		Enabled         bool `json:"enabled"`
+		ConnectedMiners int  `json:"connected_miners"`
+	}
+	getJSON(t, httpServer.URL+"/getstratuminfo", &disabled)
+	if disabled.Enabled || disabled.ConnectedMiners != 0 {
+		t.Fatalf("unexpected disabled stratum info: %+v", disabled)
+	}
+
+	server.SetStratumInfoCallback(func() any {
+		return map[string]any{
+			"enabled":          true,
+			"connected_miners": 2,
+		}
+	})
+	var enabled struct {
+		Enabled         bool `json:"enabled"`
+		ConnectedMiners int  `json:"connected_miners"`
+	}
+	getJSON(t, httpServer.URL+"/getstratuminfo", &enabled)
+	if !enabled.Enabled || enabled.ConnectedMiners != 2 {
+		t.Fatalf("unexpected enabled stratum info: %+v", enabled)
 	}
 }
 
@@ -288,7 +321,8 @@ func TestGetBlockTemplateAndSubmitBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := rpcserver.New(chain, blockstore.New(t.TempDir()))
+	logPath := t.TempDir() + "/submitblock.jsonl"
+	server := rpcserver.NewWithOptions(chain, blockstore.New(t.TempDir()), nil, rpcserver.Options{SubmitBlockLog: logPath})
 	httpServer := httptest.NewServer(server.Handler())
 	defer httpServer.Close()
 
@@ -349,6 +383,17 @@ func TestGetBlockTemplateAndSubmitBlock(t *testing.T) {
 	}, &submitted)
 	if !submitted.Accepted || submitted.Height != 3 || submitted.Hash == "" {
 		t.Fatalf("unexpected submit block result: %+v", submitted)
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logEvent rpcserver.SubmitBlockLogEvent
+	if err := json.Unmarshal(bytes.TrimSpace(logData), &logEvent); err != nil {
+		t.Fatalf("decode submitblock log: %v data=%s", err, logData)
+	}
+	if !logEvent.Accepted || logEvent.Height != 3 || logEvent.Hash != submitted.Hash || logEvent.MinerAddress != w.Keys[0].Address || logEvent.Status != http.StatusOK {
+		t.Fatalf("unexpected submitblock log: %+v", logEvent)
 	}
 
 	var best struct {

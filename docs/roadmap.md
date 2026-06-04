@@ -42,6 +42,6 @@
 
 ## Phase 5: Official Pool
 
-- Build `pacpool`.
-- Add stratum support for BLAKE-256 r14 ASIC miners.
+- Ship the first `pacd --stratum` solo bridge for BLAKE-256 r14 ASIC miners.
+- Build `pacpool` on top of the Stratum bridge.
 - Add payout accounting, dashboard, and pool fee configuration.

@@ -30,6 +30,7 @@ type Server struct {
 	store            *blockstore.Store
 	mux              *http.ServeMux
 	mu               *sync.Mutex
+	miningLog        *SubmitBlockLogger
 	authToken        string
 	mempool          []*wire.MsgTx
 	onBlockConnected func(*wire.MsgBlock)
@@ -37,10 +38,12 @@ type Server struct {
 	peerInfo         func() []PeerSnapshot
 	peerCount        func() int
 	knownAddrCount   func() int
+	stratumInfo      func() any
 }
 
 type Options struct {
-	AuthToken string
+	AuthToken      string
+	SubmitBlockLog string
 }
 
 type PeerSnapshot struct {
@@ -68,6 +71,7 @@ func NewWithOptions(chain *blockchain.Chain, store *blockstore.Store, mu *sync.M
 		store:     store,
 		mux:       http.NewServeMux(),
 		mu:        mu,
+		miningLog: NewSubmitBlockLogger(opts.SubmitBlockLog),
 		authToken: strings.TrimSpace(opts.AuthToken),
 	}
 	server.mux.HandleFunc("/", server.handleIndex)
@@ -78,6 +82,7 @@ func NewWithOptions(chain *blockchain.Chain, store *blockstore.Store, mu *sync.M
 	server.mux.HandleFunc("/getrawtransaction/", server.handleGetRawTransaction)
 	server.mux.HandleFunc("/getaddressutxos/", server.handleGetAddressUTXOs)
 	server.mux.HandleFunc("/getmininginfo", server.handleGetMiningInfo)
+	server.mux.HandleFunc("/getstratuminfo", server.handleGetStratumInfo)
 	server.mux.HandleFunc("/getblocktemplate", server.handleGetBlockTemplate)
 	server.mux.HandleFunc("/getnetworkinfo", server.handleGetNetworkInfo)
 	server.mux.HandleFunc("/getpeerinfo", server.handleGetPeerInfo)
@@ -124,6 +129,10 @@ func (s *Server) SetPeerCallbacks(peerInfo func() []PeerSnapshot, peerCount func
 	s.peerInfo = peerInfo
 	s.peerCount = peerCount
 	s.knownAddrCount = knownAddrCount
+}
+
+func (s *Server) SetStratumInfoCallback(stratumInfo func() any) {
+	s.stratumInfo = stratumInfo
 }
 
 func (s *Server) AcceptTransaction(tx *wire.MsgTx) (bool, error) {
@@ -418,6 +427,25 @@ func (s *Server) handleGetMiningInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleGetStratumInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.stratumInfo == nil {
+		writeJSON(w, map[string]any{
+			"enabled":          false,
+			"connected_miners": 0,
+			"connected_peers":  0,
+			"workers":          []any{},
+			"sessions":         []any{},
+			"updated_at":       time.Now().UTC(),
+		})
+		return
+	}
+	writeJSON(w, s.stratumInfo())
+}
+
 func (s *Server) handleGetBlockTemplate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -597,43 +625,54 @@ func (s *Server) handleSubmitRawTransaction(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleSubmitBlock(w http.ResponseWriter, r *http.Request) {
+	logEvent := submitBlockLogEvent(r)
 	if r.Method != http.MethodPost {
+		s.writeSubmitBlockLog(logEvent, http.StatusMethodNotAllowed, false, "method not allowed")
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	params := s.chain.Params()
 	if !chaincfg.MiningOpen(params, time.Now().UTC()) {
-		writeError(w, http.StatusServiceUnavailable, fmt.Sprintf("%s mining opens at %s", params.Name, chaincfg.MiningStartTimeText(params)))
+		msg := fmt.Sprintf("%s mining opens at %s", params.Name, chaincfg.MiningStartTimeText(params))
+		s.writeSubmitBlockLog(logEvent, http.StatusServiceUnavailable, false, msg)
+		writeError(w, http.StatusServiceUnavailable, msg)
 		return
 	}
 	blockHex, err := readBlockHex(r)
 	if err != nil {
+		s.writeSubmitBlockLog(logEvent, http.StatusBadRequest, false, err.Error())
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	blockBytes, err := hex.DecodeString(strings.TrimSpace(blockHex))
 	if err != nil {
+		s.writeSubmitBlockLog(logEvent, http.StatusBadRequest, false, "invalid block hex")
 		writeError(w, http.StatusBadRequest, "invalid block hex")
 		return
 	}
 	block, err := wire.DeserializeBlock(blockBytes)
 	if err != nil {
+		s.writeSubmitBlockLog(logEvent, http.StatusBadRequest, false, err.Error())
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	addSubmitBlockDetails(&logEvent, params, block, blockBytes)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if err := s.chain.ValidateBlock(block); err != nil {
+		s.writeSubmitBlockLog(logEvent, http.StatusBadRequest, false, err.Error())
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := s.store.Append(block); err != nil {
+		s.writeSubmitBlockLog(logEvent, http.StatusInternalServerError, false, err.Error())
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if err := s.chain.AddBlock(block); err != nil {
+		s.writeSubmitBlockLog(logEvent, http.StatusBadRequest, false, err.Error())
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -641,6 +680,7 @@ func (s *Server) handleSubmitBlock(w http.ResponseWriter, r *http.Request) {
 	if s.onBlockConnected != nil {
 		s.onBlockConnected(block)
 	}
+	s.writeSubmitBlockLog(logEvent, http.StatusOK, true, "")
 	writeJSON(w, map[string]any{
 		"accepted": true,
 		"hash":     block.MustBlockHash().String(),

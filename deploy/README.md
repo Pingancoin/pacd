@@ -24,11 +24,13 @@ Keep mining pool and wallet-facing services on separate hosts where possible.
 
 ## Ports
 
+- `9507/tcp`: optional Stratum mining endpoint for Blake256R14 ASICs
 - `9508/tcp`: P2P mainnet
 - `9509/tcp`: local HTTP RPC
 
 Recommended exposure:
 
+- Stratum: public only on mining pool / solo mining bridge hosts
 - P2P: public on seed/full-node servers
 - RPC: bind to `127.0.0.1` unless a reverse proxy or private network is intentionally exposing it
 - RPC auth: set `PACD_RPC_TOKEN` for any RPC service reachable outside the local host or a trusted private network
@@ -64,6 +66,8 @@ sudo chown -R pacd:pacd /var/lib/pacd
 4. Adjust `/etc/pingancoin/pacd-mainnet.env`
    - leave `PACD_RPC_LISTEN=127.0.0.1:9509` for normal deployments
    - set `PACD_RPC_TOKEN` when a reverse proxy or private service talks to RPC
+   - set `PACD_STRATUM=true`, `PACD_STRATUM_ADDRESS=<P... payout address>`,
+     and open `9507/tcp` when this host should accept Antminer DR5 workers
 5. Validate consensus readiness:
 
 ```bash
@@ -118,6 +122,8 @@ too low.
 - final 3-of-5 project payout script inserted into mainnet params
 - `pacd launch-check --network mainnet` returns ready
 - DNS for `server1..server3.pingancoin.org` resolves correctly
+- if mining with DR5 units, `pacd` logs `stratum listening on
+  stratum+tcp://0.0.0.0:9507` and the host firewall allows `9507/tcp`
 - P2P port `9508/tcp` reachable from the public internet on seed nodes
 - RPC port `9509/tcp` bound privately unless intentionally proxied
 - static seed peer drop-ins are installed on official seed nodes

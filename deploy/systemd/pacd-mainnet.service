@@ -7,6 +7,11 @@ Wants=network-online.target
 Type=simple
 User=pacd
 Group=pacd
+Environment=PACD_STRATUM=false
+Environment=PACD_STRATUM_LISTEN=0.0.0.0:9507
+Environment=PACD_STRATUM_ADDRESS=
+Environment=PACD_STRATUM_DIFF=4096
+Environment=PACD_STRATUM_REFRESH=30s
 EnvironmentFile=/etc/pingancoin/pacd-mainnet.env
 ExecStart=/usr/local/bin/pacd \
   --network ${PACD_NETWORK} \
@@ -14,9 +19,15 @@ ExecStart=/usr/local/bin/pacd \
   --rpc \
   --rpclisten ${PACD_RPC_LISTEN} \
   --rpctoken=${PACD_RPC_TOKEN} \
+  --submitblocklog=${PACD_SUBMITBLOCK_LOG} \
   --p2p \
   --listen ${PACD_P2P_LISTEN} \
-  --maxpeers ${PACD_MAX_PEERS}
+  --maxpeers ${PACD_MAX_PEERS} \
+  --stratum=${PACD_STRATUM} \
+  --stratumlisten=${PACD_STRATUM_LISTEN} \
+  --stratumaddress=${PACD_STRATUM_ADDRESS} \
+  --stratumdiff=${PACD_STRATUM_DIFF} \
+  --stratumrefresh=${PACD_STRATUM_REFRESH}
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65535
@@ -24,7 +35,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/pacd
+ReadWritePaths=/var/lib/pacd /var/log/pingancoin
 
 [Install]
 WantedBy=multi-user.target

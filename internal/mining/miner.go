@@ -43,6 +43,9 @@ func NewCandidateWithTransactions(chain *blockchain.Chain, minerScript []byte, t
 	if err := block.RefreshMerkleRoot(); err != nil {
 		return nil, err
 	}
+	if err := block.RefreshHeaderSize(); err != nil {
+		return nil, err
+	}
 	return block, nil
 }
 

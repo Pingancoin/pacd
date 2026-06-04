@@ -5,18 +5,32 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 
 	"github.com/decred/dcrd/crypto/blake256"
 )
 
+const MaxBlockHeaderPayload = 180
+
 type BlockHeader struct {
-	Version    int32
-	PrevBlock  Hash
-	MerkleRoot Hash
-	Timestamp  int64
-	Bits       uint32
-	Nonce      uint32
-	Height     uint32
+	Version      int32
+	PrevBlock    Hash
+	MerkleRoot   Hash
+	StakeRoot    Hash
+	VoteBits     uint16
+	FinalState   [6]byte
+	Voters       uint16
+	FreshStake   uint8
+	Revocations  uint8
+	PoolSize     uint32
+	Bits         uint32
+	SBits        int64
+	Height       uint32
+	Size         uint32
+	Timestamp    int64
+	Nonce        uint32
+	ExtraData    [32]byte
+	StakeVersion uint32
 }
 
 type MsgBlock struct {
@@ -25,23 +39,56 @@ type MsgBlock struct {
 }
 
 func (h *BlockHeader) Serialize() ([]byte, error) {
-	buf := new(bytes.Buffer)
+	if h.Timestamp < 0 || h.Timestamp > math.MaxUint32 {
+		return nil, fmt.Errorf("timestamp %d is outside uint32 header range", h.Timestamp)
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, MaxBlockHeaderPayload))
 	if err := binary.Write(buf, binary.LittleEndian, h.Version); err != nil {
 		return nil, err
 	}
 	buf.Write(h.PrevBlock[:])
 	buf.Write(h.MerkleRoot[:])
-	if err := binary.Write(buf, binary.LittleEndian, h.Timestamp); err != nil {
+	buf.Write(h.StakeRoot[:])
+	if err := binary.Write(buf, binary.LittleEndian, h.VoteBits); err != nil {
+		return nil, err
+	}
+	buf.Write(h.FinalState[:])
+	if err := binary.Write(buf, binary.LittleEndian, h.Voters); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.LittleEndian, h.FreshStake); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.LittleEndian, h.Revocations); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.LittleEndian, h.PoolSize); err != nil {
 		return nil, err
 	}
 	if err := binary.Write(buf, binary.LittleEndian, h.Bits); err != nil {
 		return nil, err
 	}
-	if err := binary.Write(buf, binary.LittleEndian, h.Nonce); err != nil {
+	if err := binary.Write(buf, binary.LittleEndian, h.SBits); err != nil {
 		return nil, err
 	}
 	if err := binary.Write(buf, binary.LittleEndian, h.Height); err != nil {
 		return nil, err
+	}
+	if err := binary.Write(buf, binary.LittleEndian, h.Size); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.LittleEndian, uint32(h.Timestamp)); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.LittleEndian, h.Nonce); err != nil {
+		return nil, err
+	}
+	buf.Write(h.ExtraData[:])
+	if err := binary.Write(buf, binary.LittleEndian, h.StakeVersion); err != nil {
+		return nil, err
+	}
+	if buf.Len() != MaxBlockHeaderPayload {
+		return nil, fmt.Errorf("serialized header length is %d, want %d", buf.Len(), MaxBlockHeaderPayload)
 	}
 	return buf.Bytes(), nil
 }
@@ -78,6 +125,26 @@ func (b *MsgBlock) Serialize() ([]byte, error) {
 		writeVarBytes(buf, serializedTx)
 	}
 	return buf.Bytes(), nil
+}
+
+func (b *MsgBlock) SerializedSize() (uint32, error) {
+	serialized, err := b.Serialize()
+	if err != nil {
+		return 0, err
+	}
+	if len(serialized) > math.MaxUint32 {
+		return 0, fmt.Errorf("serialized block length %d exceeds uint32", len(serialized))
+	}
+	return uint32(len(serialized)), nil
+}
+
+func (b *MsgBlock) RefreshHeaderSize() error {
+	size, err := b.SerializedSize()
+	if err != nil {
+		return err
+	}
+	b.Header.Size = size
+	return nil
 }
 
 func DeserializeBlock(serialized []byte) (*MsgBlock, error) {
@@ -134,16 +201,51 @@ func deserializeBlockHeader(reader *bytes.Reader) (BlockHeader, error) {
 	if _, err := io.ReadFull(reader, header.MerkleRoot[:]); err != nil {
 		return header, err
 	}
-	if err := binary.Read(reader, binary.LittleEndian, &header.Timestamp); err != nil {
+	if _, err := io.ReadFull(reader, header.StakeRoot[:]); err != nil {
+		return header, err
+	}
+	if err := binary.Read(reader, binary.LittleEndian, &header.VoteBits); err != nil {
+		return header, err
+	}
+	if _, err := io.ReadFull(reader, header.FinalState[:]); err != nil {
+		return header, err
+	}
+	if err := binary.Read(reader, binary.LittleEndian, &header.Voters); err != nil {
+		return header, err
+	}
+	if err := binary.Read(reader, binary.LittleEndian, &header.FreshStake); err != nil {
+		return header, err
+	}
+	if err := binary.Read(reader, binary.LittleEndian, &header.Revocations); err != nil {
+		return header, err
+	}
+	if err := binary.Read(reader, binary.LittleEndian, &header.PoolSize); err != nil {
 		return header, err
 	}
 	if err := binary.Read(reader, binary.LittleEndian, &header.Bits); err != nil {
 		return header, err
 	}
-	if err := binary.Read(reader, binary.LittleEndian, &header.Nonce); err != nil {
+	if err := binary.Read(reader, binary.LittleEndian, &header.SBits); err != nil {
 		return header, err
 	}
 	if err := binary.Read(reader, binary.LittleEndian, &header.Height); err != nil {
+		return header, err
+	}
+	if err := binary.Read(reader, binary.LittleEndian, &header.Size); err != nil {
+		return header, err
+	}
+	var timestamp uint32
+	if err := binary.Read(reader, binary.LittleEndian, &timestamp); err != nil {
+		return header, err
+	}
+	header.Timestamp = int64(timestamp)
+	if err := binary.Read(reader, binary.LittleEndian, &header.Nonce); err != nil {
+		return header, err
+	}
+	if _, err := io.ReadFull(reader, header.ExtraData[:]); err != nil {
+		return header, err
+	}
+	if err := binary.Read(reader, binary.LittleEndian, &header.StakeVersion); err != nil {
 		return header, err
 	}
 	return header, nil

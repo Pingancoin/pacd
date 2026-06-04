@@ -15,7 +15,7 @@ bytes selected to produce `P...` addresses.
 
 ## Genesis
 
-- Timestamp: 2026-06-01 00:00:00 UTC
+- Timestamp: 2026-06-01 09:00:00 UTC
 - Message: `Pingancoin PAC genesis: pure PoW, no premine, BLAKE-256 r14, 2026-06-01`
 - Spendable premine: 0 PAC
 
@@ -71,6 +71,9 @@ The current integer subsidy estimate is approximately 20,999,999.99721303 PAC.
 PAC uses per-block ASERT-style difficulty adjustment instead of a daily or
 large-window retarget. The initial implementation uses integer fixed-point
 calculation, a 150-second target spacing, and a configurable half-life.
+Mainnet starts from an initial proof-of-work difficulty of approximately 6 so
+the first block can be found by early GPU miners before ASERT has live block
+timing data.
 
 ## Removed Decred PoS Surface
 

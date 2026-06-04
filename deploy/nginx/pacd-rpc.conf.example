@@ -3,6 +3,20 @@
 # Keep pacd itself bound to 127.0.0.1:9509 and set PACD_RPC_TOKEN in
 # /etc/pingancoin/pacd-mainnet.env. nginx injects the internal bearer token
 # before proxying to pacd, so public clients do not need to know the token.
+#
+# Do not expose mining RPC publicly. Public wallet/explorer RPC may be useful
+# for reads, but getblocktemplate/getwork/submitblock allow external RPC
+# mining or block submission. Keep those available only through local RPC or
+# trusted private endpoints.
+
+location = /rpc/getblocktemplate { return 403; }
+location = /rpc/getblocktemplate/ { return 403; }
+location = /rpc/generate { return 403; }
+location = /rpc/generate/ { return 403; }
+location = /rpc/getwork { return 403; }
+location = /rpc/getwork/ { return 403; }
+location = /rpc/submitblock { return 403; }
+location = /rpc/submitblock/ { return 403; }
 
 location /rpc/ {
     proxy_http_version 1.1;

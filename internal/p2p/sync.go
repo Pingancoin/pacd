@@ -87,7 +87,7 @@ func DeserializeHeaders(payload []byte) (Headers, error) {
 	}
 	headers := make([]wire.BlockHeader, 0, count)
 	for i := uint32(0); i < count; i++ {
-		headerBytes := make([]byte, 88)
+		headerBytes := make([]byte, wire.MaxBlockHeaderPayload)
 		if _, err := io.ReadFull(reader, headerBytes); err != nil {
 			return Headers{}, err
 		}

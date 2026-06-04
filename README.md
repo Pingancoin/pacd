@@ -35,8 +35,9 @@ apply in their own jurisdiction. Users act at their own risk.
 | First normal block split | 16.07462662 PAC miner / 0.84603299 PAC project |
 | Coinbase maturity | 100 blocks on mainnet/testnet, 2 blocks on simnet |
 | Premine | 0 |
-| Genesis time | 2026-06-01 00:00:00 UTC |
-| Mainnet mining opens | 2026-06-01 00:00:00 UTC |
+| Genesis time | 2026-06-01 09:00:00 UTC |
+| Mainnet mining opens | 2026-06-01 09:00:00 UTC |
+| Initial mainnet difficulty | Approximately 6 |
 | Genesis message | `Pingancoin PAC genesis: pure PoW, no premine, BLAKE-256 r14, 2026-06-01` |
 
 ## Layout
@@ -50,6 +51,7 @@ internal/consensus    subsidy, PoW, ASERT difficulty
 internal/mining       candidate block and nonce search
 internal/p2p          peer manager and P2P handshake protocol
 internal/rpcserver    local HTTP RPC for blocks, mempool, mining, tx lookup
+internal/stratum      solo Stratum bridge for Blake256R14 ASIC miners
 internal/wallet       wallet keys, balance scan, signing, submission
 internal/wire         block and transaction primitives
 docs/                 project design notes
@@ -65,7 +67,7 @@ go run ./cmd/pacd --network simnet --printparams
 go run ./cmd/pacd --network simnet --mine PsimMiner --blocks 3
 ```
 
-Mainnet is launch-locked until `2026-06-01T00:00:00Z`. Before that time,
+Mainnet is launch-locked until `2026-06-01T09:00:00Z`. Before that time,
 `/getmininginfo` reports the countdown while `/getblocktemplate`,
 `/submitblock`, and P2P block/header acceptance reject normal blocks.
 
@@ -144,6 +146,18 @@ Start a local P2P listener:
 ```bash
 go run ./cmd/pacd --network simnet --p2p --listen 127.0.0.1:29508
 ```
+
+Start a local solo Stratum bridge for DR5-compatible Blake256R14 ASICs:
+
+```bash
+go run ./cmd/pacd --network mainnet --datadir /var/lib/pacd \
+  --p2p --listen 0.0.0.0:9508 \
+  --stratum --stratumlisten 0.0.0.0:9507 \
+  --stratumaddress <P...miner-payout-address>
+```
+
+Point the miner at `stratum+tcp://<host>:9507`. The worker name and password
+are accepted for compatibility; block rewards pay to `--stratumaddress`.
 
 Connect another local node:
 

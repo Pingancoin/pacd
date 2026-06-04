@@ -25,6 +25,7 @@ import (
 	"github.com/Pingancoin/pacd/internal/mining"
 	"github.com/Pingancoin/pacd/internal/p2p"
 	"github.com/Pingancoin/pacd/internal/rpcserver"
+	stratumserver "github.com/Pingancoin/pacd/internal/stratum"
 	"github.com/Pingancoin/pacd/internal/wire"
 )
 
@@ -55,10 +56,16 @@ func main() {
 	rpc := flag.Bool("rpc", false, "start the local read-only HTTP RPC server")
 	rpcListen := flag.String("rpclisten", "127.0.0.1:9509", "HTTP RPC listen address")
 	rpcToken := flag.String("rpctoken", os.Getenv("PACD_RPC_TOKEN"), "optional bearer token required for every HTTP RPC request")
+	submitBlockLog := flag.String("submitblocklog", os.Getenv("PACD_SUBMITBLOCK_LOG"), "optional JSONL path for submitblock mining audit logs")
 	allowPublicRPC := flag.Bool("allowpublicrpc", false, "allow mainnet RPC on a non-loopback interface without --rpctoken")
 	p2pEnabled := flag.Bool("p2p", false, "start the P2P listener and peer manager")
 	p2pListen := flag.String("listen", "", "P2P listen address; defaults to 127.0.0.1:<network default port> when --p2p is set")
 	maxPeers := flag.Int("maxpeers", 32, "maximum P2P peers")
+	stratumEnabled := flag.Bool("stratum", false, "start the Blake256R14 solo Stratum server for DR5-compatible ASICs")
+	stratumListen := flag.String("stratumlisten", "0.0.0.0:9507", "Stratum listen address")
+	stratumAddress := flag.String("stratumaddress", os.Getenv("PACD_STRATUM_ADDRESS"), "miner payout address/script for Stratum blocks")
+	stratumDiff := flag.Float64("stratumdiff", 4096, "Stratum share difficulty")
+	stratumRefresh := flag.Duration("stratumrefresh", 30*time.Second, "Stratum job refresh interval")
 	var connectPeers stringList
 	flag.Var(&connectPeers, "connect", "P2P peer address to connect to; repeat for multiple peers")
 	flag.Parse()
@@ -94,17 +101,31 @@ func main() {
 			exit(err)
 		}
 	}
+	var stratumScript []byte
+	if *stratumEnabled {
+		payout := strings.TrimSpace(*stratumAddress)
+		if payout == "" && strings.TrimSpace(*mineTo) != "" {
+			payout = strings.TrimSpace(*mineTo)
+		}
+		if payout == "" {
+			exit(fmt.Errorf("--stratumaddress is required when --stratum is enabled"))
+		}
+		stratumScript, err = minerPayoutScript(params, payout)
+		if err != nil {
+			exit(err)
+		}
+	}
 
 	if *mineTo == "" {
 		if !*printParams {
 			printConsensusParams(params)
 		}
 		printMiningSummary(chain, store)
-		if *rpc || *p2pEnabled {
+		if *rpc || *p2pEnabled || *stratumEnabled {
 			if err := validateRPCExposure(params, *rpc, *rpcListen, *rpcToken, *allowPublicRPC); err != nil {
 				exit(err)
 			}
-			runServices(chain, store, *rpc, *rpcListen, *rpcToken, *p2pEnabled, *p2pListen, connectPeers, *maxPeers)
+			runServices(chain, store, *rpc, *rpcListen, *rpcToken, *submitBlockLog, *p2pEnabled, *p2pListen, connectPeers, *maxPeers, *stratumEnabled, *stratumListen, stratumScript, *stratumDiff, *stratumRefresh)
 		}
 		return
 	}
@@ -148,11 +169,11 @@ func main() {
 		}
 	}
 	printMiningSummary(chain, store)
-	if *rpc || *p2pEnabled {
+	if *rpc || *p2pEnabled || *stratumEnabled {
 		if err := validateRPCExposure(params, *rpc, *rpcListen, *rpcToken, *allowPublicRPC); err != nil {
 			exit(err)
 		}
-		runServices(chain, store, *rpc, *rpcListen, *rpcToken, *p2pEnabled, *p2pListen, connectPeers, *maxPeers)
+		runServices(chain, store, *rpc, *rpcListen, *rpcToken, *submitBlockLog, *p2pEnabled, *p2pListen, connectPeers, *maxPeers, *stratumEnabled, *stratumListen, stratumScript, *stratumDiff, *stratumRefresh)
 	}
 }
 
@@ -594,14 +615,15 @@ func printMiningSummary(chain *blockchain.Chain, store *blockstore.Store) {
 	)
 }
 
-func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bool, rpcListen string, rpcToken string, p2pEnabled bool, p2pListen string, connectPeers []string, maxPeers int) {
+func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bool, rpcListen string, rpcToken string, submitBlockLog string, p2pEnabled bool, p2pListen string, connectPeers []string, maxPeers int, stratumEnabled bool, stratumListen string, stratumScript []byte, stratumDiff float64, stratumRefresh time.Duration) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	chainMu := &sync.Mutex{}
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	var node *p2p.Node
 	var server *rpcserver.Server
+	var stratum *stratumserver.Server
 	if p2pEnabled {
 		listen := p2pListen
 		if listen == "" {
@@ -636,7 +658,10 @@ func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bo
 		}
 	}
 	if rpcEnabled {
-		server = rpcserver.NewWithOptions(chain, store, chainMu, rpcserver.Options{AuthToken: rpcToken})
+		server = rpcserver.NewWithOptions(chain, store, chainMu, rpcserver.Options{
+			AuthToken:      rpcToken,
+			SubmitBlockLog: submitBlockLog,
+		})
 		if node != nil {
 			server.SetBlockConnectedCallback(node.RelayBlock)
 			server.SetTransactionAcceptedCallback(node.RelayTransaction)
@@ -645,6 +670,32 @@ func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bo
 			node.SetChainReorgCallback(server.NotifyChainReorganized)
 			node.SetTransactionCallbacks(server.HasTransaction, server.TransactionByHash, server.AcceptTransaction)
 		}
+	}
+	if stratumEnabled {
+		var err error
+		stratum, err = stratumserver.New(chain, store, chainMu, stratumserver.Options{
+			ListenAddr:      stratumListen,
+			MinerScript:     stratumScript,
+			ShareDifficulty: stratumDiff,
+			JobRefresh:      stratumRefresh,
+			Logger:          log.New(os.Stdout, "", 0),
+		})
+		if err != nil {
+			exit(err)
+		}
+		if server != nil {
+			server.SetStratumInfoCallback(func() any {
+				return stratum.Stats()
+			})
+		}
+		stratum.SetBlockConnectedCallback(func(block *wire.MsgBlock) {
+			if server != nil {
+				server.NotifyBlockConnected(block)
+			}
+			if node != nil {
+				node.RelayBlock(block)
+			}
+		})
 	}
 	if rpcEnabled {
 		fmt.Printf("rpc listening on http://%s\n", rpcListen)
@@ -658,6 +709,12 @@ func runServices(chain *blockchain.Chain, store *blockstore.Store, rpcEnabled bo
 	if node != nil {
 		go func() {
 			errCh <- node.Start(ctx)
+		}()
+	}
+	if stratum != nil {
+		fmt.Printf("stratum listening on stratum+tcp://%s diff=%.0f\n", stratum.ListenAddr(), stratum.ShareDifficulty())
+		go func() {
+			errCh <- stratum.ListenAndServe(ctx)
 		}()
 	}
 

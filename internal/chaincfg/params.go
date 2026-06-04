@@ -19,8 +19,8 @@ const (
 )
 
 var (
-	MainNetMiningStartTime = time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	defaultGenesisTime     = time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	MainNetMiningStartTime = time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	defaultGenesisTime     = time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
 )
 
 var MainNetProjectPayoutScript = []byte{
@@ -59,7 +59,7 @@ type Params struct {
 }
 
 func MainNetParams() *Params {
-	params := commonParams("mainnet", "P", "9508", 0xfacec001, 0x37, 0x38, 0x1d00ffff, 0x1b01ffff, 224)
+	params := commonParams("mainnet", "P", "9508", 0xfacec001, 0x37, 0x38, 0x1d00ffff, 0x1c2aaaaa, 224)
 	params.CoinbaseMaturity = 100
 	params.MiningStartTime = MainNetMiningStartTime.Unix()
 	params.DNSSeeds = []string{
@@ -155,6 +155,9 @@ func genesisBlock(bits uint32, timestamp time.Time) *wire.MsgBlock {
 		Transactions: []*wire.MsgTx{genesisTx},
 	}
 	if err := block.RefreshMerkleRoot(); err != nil {
+		panic(err)
+	}
+	if err := block.RefreshHeaderSize(); err != nil {
 		panic(err)
 	}
 	return block

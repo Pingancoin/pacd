@@ -1,0 +1,23 @@
+[Unit]
+Description=Pingancoin pacpool live Stratum view bridge
+After=network-online.target pacd-mainnet.service pacpool-mainnet.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/local/bin/pacpoolview \
+  --listen=127.0.0.1:9819 \
+  --pacpool=http://127.0.0.1:9809 \
+  --pacd=http://127.0.0.1:9509 \
+  --timeout=3s
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
