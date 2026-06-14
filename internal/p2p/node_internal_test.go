@@ -23,11 +23,73 @@ func TestBanScoreAppliesByHost(t *testing.T) {
 	}
 
 	node.addBanScore("127.0.0.1:10000", banThreshold, "test")
-	if node.reservePeer("127.0.0.1:10001") {
+	if node.reservePeer("127.0.0.1:10001", false) {
 		t.Fatal("peer from banned host was accepted with a different port")
 	}
-	if !node.reservePeer("127.0.0.2:10000") {
+	if !node.reservePeer("127.0.0.2:10000", false) {
 		t.Fatal("peer from a different host was unexpectedly rejected")
+	}
+}
+
+func TestReservePeerDeduplicatesByHost(t *testing.T) {
+	node, err := NewNode(Config{
+		Params:   chaincfg.SimNetParams(),
+		MaxPeers: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !node.reservePeer("203.0.113.1:10000", false) {
+		t.Fatal("first peer was rejected")
+	}
+	if node.reservePeer("203.0.113.1:10001", false) {
+		t.Fatal("second peer from same host was accepted")
+	}
+	if !node.reservePeer("203.0.113.2:10000", false) {
+		t.Fatal("peer from different host was rejected")
+	}
+}
+
+func TestReservePeerLimitsPendingPeersSeparately(t *testing.T) {
+	node, err := NewNode(Config{
+		Params:   chaincfg.SimNetParams(),
+		MaxPeers: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !node.reservePeer("203.0.113.1:10000", false) {
+		t.Fatal("first pending peer was rejected")
+	}
+	if !node.reservePeer("203.0.113.2:10000", false) {
+		t.Fatal("second pending peer was rejected")
+	}
+	if node.reservePeer("203.0.113.3:10000", false) {
+		t.Fatal("pending peer limit was not enforced")
+	}
+}
+
+func TestReservePeerAllowsStaticPeerWhenPendingIsFull(t *testing.T) {
+	staticAddr := "203.0.113.10:9508"
+	node, err := NewNode(Config{
+		Params:   chaincfg.SimNetParams(),
+		Connect:  []string{staticAddr},
+		MaxPeers: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !node.reservePeer("203.0.113.1:10000", false) {
+		t.Fatal("first pending peer was rejected")
+	}
+	if !node.reservePeer("203.0.113.2:10000", false) {
+		t.Fatal("second pending peer was rejected")
+	}
+	if !node.reservePeer(staticAddr, false) {
+		t.Fatal("static peer was blocked by pending reservations")
 	}
 }
 

@@ -309,7 +309,7 @@ func (n *Node) connectLoop(ctx context.Context, addr string) {
 func (n *Node) handleConn(ctx context.Context, conn net.Conn, inbound bool) {
 	defer conn.Close()
 	addr := conn.RemoteAddr().String()
-	if !n.reservePeer(addr) {
+	if !n.reservePeer(addr, inbound) {
 		n.logf("p2p rejecting %s: max peers reached", addr)
 		return
 	}
@@ -847,16 +847,24 @@ func (n *Node) unlockChain() {
 	}
 }
 
-func (n *Node) reservePeer(addr string) bool {
+func (n *Node) reservePeer(addr string, inbound bool) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if len(n.peers) >= n.cfg.MaxPeers {
-		return false
-	}
 	if _, ok := n.peers[addr]; ok {
 		return false
 	}
+	if n.hasPeerForHostLocked(addr) {
+		return false
+	}
 	if n.banScores[banKey(addr)] >= banThreshold {
+		return false
+	}
+	activePeers := n.activePeerCountLocked()
+	isStatic := n.isStaticPeerLocked(addr)
+	if activePeers >= n.cfg.MaxPeers && (inbound || !isStatic) {
+		return false
+	}
+	if !isStatic && n.pendingPeerCountLocked() >= maxPendingPeers(n.cfg.MaxPeers) {
 		return false
 	}
 	n.peers[addr] = &peerState{info: PeerInfo{Address: addr}}
@@ -880,6 +888,33 @@ func (n *Node) removePeer(addr string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	delete(n.peers, addr)
+}
+
+func (n *Node) activePeerCountLocked() int {
+	count := 0
+	for _, peer := range n.peers {
+		if peer.conn != nil {
+			count++
+		}
+	}
+	return count
+}
+
+func (n *Node) pendingPeerCountLocked() int {
+	count := 0
+	for _, peer := range n.peers {
+		if peer.conn == nil {
+			count++
+		}
+	}
+	return count
+}
+
+func maxPendingPeers(maxPeers int) int {
+	if maxPeers < 1 {
+		return 1
+	}
+	return maxPeers * 2
 }
 
 func (n *Node) peerInfo(addr string) (PeerInfo, bool) {
@@ -1070,10 +1105,13 @@ func (n *Node) discoveryCandidates() []string {
 		if _, ok := n.peers[addr]; ok {
 			continue
 		}
+		if n.hasPeerForHostLocked(addr) {
+			continue
+		}
 		if n.hasPeerForAdvertisedAddr(addr) {
 			continue
 		}
-		if n.isStaticPeer(addr) {
+		if n.isStaticPeerLocked(addr) {
 			continue
 		}
 		if n.banScores[banKey(addr)] >= banThreshold {
@@ -1120,7 +1158,36 @@ func (n *Node) hasPeerForAdvertisedAddr(addr string) bool {
 	return false
 }
 
+func (n *Node) hasPeerForHostLocked(addr string) bool {
+	host := banKey(addr)
+	if host == "" || isLoopbackHost(host) {
+		return false
+	}
+	for peerAddr := range n.peers {
+		if banKey(peerAddr) == host {
+			return true
+		}
+	}
+	for _, peer := range n.peers {
+		if peer.advertisedAddr != "" && banKey(peer.advertisedAddr) == host {
+			return true
+		}
+	}
+	return false
+}
+
+func isLoopbackHost(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func (n *Node) isStaticPeer(addr string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.isStaticPeerLocked(addr)
+}
+
+func (n *Node) isStaticPeerLocked(addr string) bool {
 	for _, peer := range n.cfg.Connect {
 		if normalizeAddr(peer) == addr {
 			return true
