@@ -46,6 +46,55 @@ func TestValidateBlockBeforeMiningStart(t *testing.T) {
 	}
 }
 
+func TestValidateBlockRejectsFarFutureTimestamp(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	params.MaxFutureBlockTime = 2 * time.Hour
+	chain := blockchain.New(params)
+	blockTime := time.Now().UTC().Add(params.MaxFutureBlockTime + time.Minute)
+
+	block, err := mining.MineBlock(chain, []byte("SsimMiner"), blockTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.ValidateBlock(block); err == nil {
+		t.Fatal("expected far future block timestamp to be rejected")
+	}
+}
+
+func TestValidateBlockAllowsOnlyOneSecondCatchUpWhenTipIsFutureSkewed(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	params.MaxFutureBlockTime = 24 * time.Hour
+	chain := blockchain.New(params)
+
+	skewedTipTime := time.Now().UTC().Add(3 * time.Hour)
+	skewedTip, err := mining.MineBlock(chain, []byte("SsimMiner"), skewedTipTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.AddBlock(skewedTip); err != nil {
+		t.Fatal(err)
+	}
+
+	params.MaxFutureBlockTime = 2 * time.Hour
+	allowedTime := time.Unix(skewedTip.Header.Timestamp, 0).UTC().Add(time.Second)
+	allowed, err := mining.MineBlock(chain, []byte("SsimMiner"), allowedTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.ValidateBlock(allowed); err != nil {
+		t.Fatalf("expected one-second catch-up block to pass: %v", err)
+	}
+
+	tooFarTime := allowedTime.Add(time.Second)
+	tooFar, err := mining.MineBlock(chain, []byte("SsimMiner"), tooFarTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.ValidateBlock(tooFar); err == nil {
+		t.Fatal("expected catch-up block beyond one second to be rejected")
+	}
+}
+
 func TestMineAndValidateOneHundredSimnetBlocks(t *testing.T) {
 	params := chaincfg.SimNetParams()
 	chain := blockchain.New(params)

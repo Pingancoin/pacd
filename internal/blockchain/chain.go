@@ -95,7 +95,17 @@ func (c *Chain) ExpectedBits(nextHeight uint32) uint32 {
 }
 
 func (c *Chain) AddBlock(block *wire.MsgBlock) error {
-	nextUTXOs, err := c.validateBlock(block)
+	nextUTXOs, err := c.validateBlock(block, true)
+	if err != nil {
+		return err
+	}
+	c.blocks = append(c.blocks, block)
+	c.utxos = nextUTXOs
+	return nil
+}
+
+func (c *Chain) AddStoredBlock(block *wire.MsgBlock) error {
+	nextUTXOs, err := c.validateBlock(block, false)
 	if err != nil {
 		return err
 	}
@@ -105,7 +115,7 @@ func (c *Chain) AddBlock(block *wire.MsgBlock) error {
 }
 
 func (c *Chain) ValidateBlock(block *wire.MsgBlock) error {
-	_, err := c.validateBlock(block)
+	_, err := c.validateBlock(block, true)
 	return err
 }
 
@@ -174,7 +184,7 @@ func (c *Chain) reorganizeCandidate(candidate []*wire.MsgBlock) (*Chain, bool, e
 	return reorganized, true, nil
 }
 
-func (c *Chain) validateBlock(block *wire.MsgBlock) (map[wire.OutPoint]*UTXOEntry, error) {
+func (c *Chain) validateBlock(block *wire.MsgBlock, enforceFutureLimit bool) (map[wire.OutPoint]*UTXOEntry, error) {
 	if len(block.Transactions) == 0 {
 		return nil, fmt.Errorf("block has no transactions")
 	}
@@ -192,7 +202,11 @@ func (c *Chain) validateBlock(block *wire.MsgBlock) (map[wire.OutPoint]*UTXOEntr
 		return nil, fmt.Errorf("previous block hash mismatch")
 	}
 
-	if block.Header.Timestamp <= c.Tip().Header.Timestamp {
+	if enforceFutureLimit {
+		if err := consensus.CheckBlockTimestamp(c.params, c.Tip().Header.Timestamp, block.Header.Timestamp, time.Now().UTC()); err != nil {
+			return nil, err
+		}
+	} else if block.Header.Timestamp <= c.Tip().Header.Timestamp {
 		return nil, fmt.Errorf("block timestamp must increase")
 	}
 

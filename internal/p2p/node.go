@@ -741,6 +741,7 @@ func (n *Node) validateHeaderChain(headers []wire.BlockHeader) ([]wire.Hash, err
 	}
 	prevHash := n.cfg.Chain.Tip().MustBlockHash()
 	prevTime := n.cfg.Chain.Tip().Header.Timestamp
+	now := time.Now().UTC()
 	hashes := make([]wire.Hash, 0, len(headers))
 	for _, header := range headers {
 		if header.Height < expectedHeight {
@@ -752,8 +753,8 @@ func (n *Node) validateHeaderChain(headers []wire.BlockHeader) ([]wire.Hash, err
 		if header.PrevBlock != prevHash {
 			return nil, fmt.Errorf("header previous hash mismatch at height %d", header.Height)
 		}
-		if header.Timestamp <= prevTime {
-			return nil, fmt.Errorf("header timestamp must increase at height %d", header.Height)
+		if err := consensus.CheckBlockTimestamp(n.cfg.Params, prevTime, header.Timestamp, now); err != nil {
+			return nil, fmt.Errorf("header timestamp at height %d: %w", header.Height, err)
 		}
 		expectedBits := consensus.CalcASERTNextBits(
 			n.cfg.Params.GenesisBlock.Header.Bits,
@@ -1459,8 +1460,8 @@ func (n *Node) validateSideCandidateLocked(block *wire.MsgBlock) error {
 	if block.Header.Height != prev.Header.Height+1 {
 		return fmt.Errorf("side block height %d does not extend previous height %d", block.Header.Height, prev.Header.Height)
 	}
-	if block.Header.Timestamp <= prev.Header.Timestamp {
-		return fmt.Errorf("side block timestamp must increase")
+	if err := consensus.CheckBlockTimestamp(n.cfg.Params, prev.Header.Timestamp, block.Header.Timestamp, time.Now().UTC()); err != nil {
+		return fmt.Errorf("side block timestamp: %w", err)
 	}
 	expectedBits := consensus.CalcASERTNextBits(
 		n.cfg.Params.GenesisBlock.Header.Bits,
@@ -1503,8 +1504,8 @@ func (n *Node) validateOrphanCandidateLocked(block *wire.MsgBlock) error {
 	if block.Header.Height > n.cfg.Chain.Height()+defaultMaxOrphanHeightGap {
 		return fmt.Errorf("orphan height %d is too far ahead of tip %d", block.Header.Height, n.cfg.Chain.Height())
 	}
-	if block.Header.Timestamp <= n.cfg.Chain.Tip().Header.Timestamp {
-		return fmt.Errorf("orphan timestamp must be ahead of tip")
+	if err := consensus.CheckBlockTimestamp(n.cfg.Params, n.cfg.Chain.Tip().Header.Timestamp, block.Header.Timestamp, time.Now().UTC()); err != nil {
+		return fmt.Errorf("orphan timestamp: %w", err)
 	}
 	root, err := wire.CalcMerkleRoot(block.Transactions)
 	if err != nil {

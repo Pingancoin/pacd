@@ -52,6 +52,34 @@ func TestStoreLoadAppend(t *testing.T) {
 	}
 }
 
+func TestStoreLoadAllowsExistingFutureSkewedBlocks(t *testing.T) {
+	params := chaincfg.SimNetParams()
+	params.MaxFutureBlockTime = 48 * time.Hour
+	store := blockstore.New(t.TempDir())
+	chain := blockchain.New(params)
+
+	blockTime := time.Now().UTC().Add(24 * time.Hour)
+	block, err := mining.MineBlock(chain, []byte("SsimMiner"), blockTime, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.AddBlock(block); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(block); err != nil {
+		t.Fatal(err)
+	}
+
+	params.MaxFutureBlockTime = 2 * time.Hour
+	loaded, err := store.Load(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Height() != 1 {
+		t.Fatalf("loaded height = %d, want 1", loaded.Height())
+	}
+}
+
 func TestRepairTruncatesCorruptTail(t *testing.T) {
 	params := chaincfg.SimNetParams()
 	store := blockstore.New(t.TempDir())

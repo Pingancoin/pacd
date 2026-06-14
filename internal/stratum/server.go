@@ -68,9 +68,10 @@ type Server struct {
 }
 
 type job struct {
-	id      string
-	block   *wire.MsgBlock
-	created time.Time
+	id            string
+	block         *wire.MsgBlock
+	prevTimestamp int64
+	created       time.Time
 }
 
 type session struct {
@@ -586,18 +587,16 @@ func (s *Server) createJob() (*job, error) {
 	defer s.mu.Unlock()
 
 	now := time.Now().UTC()
-	tipTime := time.Unix(s.chain.Tip().Header.Timestamp, 0).UTC()
-	if !now.After(tipTime) {
-		now = tipTime.Add(time.Second)
-	}
-	block, err := mining.NewCandidate(s.chain, s.minerScript, now)
+	blockTime := consensus.NextBlockTime(s.chain.Params(), s.chain.Tip().Header.Timestamp, now)
+	block, err := mining.NewCandidate(s.chain, s.minerScript, blockTime)
 	if err != nil {
 		return nil, err
 	}
 	j := &job{
-		id:      strconv.FormatUint(atomic.AddUint64(&s.nextJob, 1), 16),
-		block:   block,
-		created: now,
+		id:            strconv.FormatUint(atomic.AddUint64(&s.nextJob, 1), 16),
+		block:         block,
+		prevTimestamp: s.chain.Tip().Header.Timestamp,
+		created:       now,
 	}
 	s.cacheJob(j)
 	return j, nil
@@ -657,6 +656,9 @@ func (s *Server) submit(client *session, jobID, extraNonceHex, ntimeHex, nonceHe
 		return false, fmt.Errorf("invalid ntime")
 	}
 	block.Header.Timestamp = int64(ntime)
+	if err := consensus.CheckBlockTimestamp(s.chain.Params(), j.prevTimestamp, block.Header.Timestamp, time.Now().UTC()); err != nil {
+		return false, err
+	}
 	nonce, err := strconv.ParseUint(nonceHex, 16, 32)
 	if err != nil {
 		return false, fmt.Errorf("invalid nonce")

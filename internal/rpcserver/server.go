@@ -474,7 +474,9 @@ func (s *Server) handleGetBlockTemplate(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("miner address: %v", err))
 		return
 	}
-	nextTime := templateTime(s.chain.Tip().Header.Timestamp, req.Timestamp)
+	nextTime := templateTime(params, s.chain.Tip().Header.Timestamp, req.Timestamp)
+	minTime := s.chain.Tip().Header.Timestamp + 1
+	maxTime := consensus.MaxAllowedBlockTime(params, s.chain.Tip().Header.Timestamp, time.Now().UTC()).Unix()
 	txs := append([]*wire.MsgTx(nil), s.mempool...)
 	block, err := mining.NewCandidateWithTransactions(s.chain, minerScript, nextTime, txs)
 	if err != nil {
@@ -503,6 +505,8 @@ func (s *Server) handleGetBlockTemplate(w http.ResponseWriter, r *http.Request) 
 		Bits:              fmt.Sprintf("%08x", block.Header.Bits),
 		Difficulty:        consensus.DifficultyRatio(block.Header.Bits, params).FloatString(4),
 		Timestamp:         block.Header.Timestamp,
+		MinTime:           minTime,
+		MaxTime:           maxTime,
 		TargetSpacingSec:  int64(params.TargetTimePerBlock / time.Second),
 		MempoolSize:       len(s.mempool),
 		Transactions:      transactionResults(params, txs),
@@ -978,6 +982,8 @@ type blockTemplateResult struct {
 	Bits              string              `json:"bits"`
 	Difficulty        string              `json:"difficulty"`
 	Timestamp         int64               `json:"timestamp"`
+	MinTime           int64               `json:"mintime"`
+	MaxTime           int64               `json:"maxtime"`
 	TargetSpacingSec  int64               `json:"targetspacingsec"`
 	MempoolSize       int                 `json:"mempoolsize"`
 	TotalFees         int64               `json:"totalfees"`
@@ -1070,14 +1076,19 @@ func serializeBlockHex(block *wire.MsgBlock) (string, error) {
 	return hex.EncodeToString(serialized), nil
 }
 
-func templateTime(tipTimestamp int64, requested int64) time.Time {
-	nextTime := time.Now().UTC()
+func templateTime(params *chaincfg.Params, tipTimestamp int64, requested int64) time.Time {
+	now := time.Now().UTC()
+	nextTime := consensus.NextBlockTime(params, tipTimestamp, now)
 	if requested > 0 {
 		nextTime = time.Unix(requested, 0).UTC()
 	}
 	tipTime := time.Unix(tipTimestamp, 0).UTC()
 	if !nextTime.After(tipTime) {
 		nextTime = tipTime.Add(time.Second)
+	}
+	maxTime := consensus.MaxAllowedBlockTime(params, tipTimestamp, now)
+	if nextTime.After(maxTime) {
+		nextTime = maxTime
 	}
 	return nextTime
 }

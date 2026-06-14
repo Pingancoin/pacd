@@ -121,7 +121,7 @@ func (s *Store) load(params *chaincfg.Params) (*blockchain.Chain, int64, error) 
 		if err != nil {
 			return nil, recordOffset, fmt.Errorf("%s line %d: %w", s.path, line, err)
 		}
-		if err := chain.AddBlock(block); err != nil {
+		if err := chain.AddStoredBlock(block); err != nil {
 			return nil, recordOffset, fmt.Errorf("%s line %d: %w", s.path, line, err)
 		}
 	}

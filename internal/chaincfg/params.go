@@ -45,6 +45,7 @@ type Params struct {
 	GenesisBits          uint32
 	TargetTimePerBlock   time.Duration
 	ASERTHalfLife        time.Duration
+	MaxFutureBlockTime   time.Duration
 	BaseSubsidy          int64
 	MulSubsidy           int64
 	DivSubsidy           int64
@@ -112,6 +113,7 @@ func commonParamsWithGenesisTime(name, addressPrefix, defaultPort string, networ
 		GenesisBits:          genesisBits,
 		TargetTimePerBlock:   150 * time.Second,
 		ASERTHalfLife:        2 * time.Hour,
+		MaxFutureBlockTime:   2 * time.Hour,
 		BaseSubsidy:          1_692_065_961,
 		MulSubsidy:           100,
 		DivSubsidy:           101,
