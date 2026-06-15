@@ -653,7 +653,7 @@ func (n *Node) handleBlock(addr string, payload []byte) error {
 	if err != nil {
 		return err
 	}
-	connected, connectedBlocks, disconnectedBlocks, err := n.connectBlock(block)
+	connected, connectedBlocks, disconnectedBlocks, err := n.connectBlock(addr, block)
 	if err != nil {
 		return err
 	}
@@ -741,7 +741,6 @@ func (n *Node) validateHeaderChain(headers []wire.BlockHeader) ([]wire.Hash, err
 	}
 	prevHash := n.cfg.Chain.Tip().MustBlockHash()
 	prevTime := n.cfg.Chain.Tip().Header.Timestamp
-	now := time.Now().UTC()
 	hashes := make([]wire.Hash, 0, len(headers))
 	for _, header := range headers {
 		if header.Height < expectedHeight {
@@ -753,8 +752,8 @@ func (n *Node) validateHeaderChain(headers []wire.BlockHeader) ([]wire.Hash, err
 		if header.PrevBlock != prevHash {
 			return nil, fmt.Errorf("header previous hash mismatch at height %d", header.Height)
 		}
-		if err := consensus.CheckBlockTimestamp(n.cfg.Params, prevTime, header.Timestamp, now); err != nil {
-			return nil, fmt.Errorf("header timestamp at height %d: %w", header.Height, err)
+		if header.Timestamp <= prevTime {
+			return nil, fmt.Errorf("header timestamp at height %d must increase", header.Height)
 		}
 		expectedBits := consensus.CalcASERTNextBits(
 			n.cfg.Params.GenesisBlock.Header.Bits,
@@ -787,7 +786,7 @@ func (n *Node) blockByHash(hash wire.Hash) (*wire.MsgBlock, bool) {
 	return n.cfg.Chain.BlockByHash(hash)
 }
 
-func (n *Node) connectBlock(block *wire.MsgBlock) (bool, []*wire.MsgBlock, []*wire.MsgBlock, error) {
+func (n *Node) connectBlock(addr string, block *wire.MsgBlock) (bool, []*wire.MsgBlock, []*wire.MsgBlock, error) {
 	n.lockChain()
 	defer n.unlockChain()
 	if n.cfg.Chain == nil {
@@ -810,7 +809,7 @@ func (n *Node) connectBlock(block *wire.MsgBlock) (bool, []*wire.MsgBlock, []*wi
 		n.addOrphanLocked(block)
 		return false, nil, nil, nil
 	}
-	if err := n.cfg.Chain.ValidateBlock(block); err != nil {
+	if err := n.validateMainChainBlockLocked(block, addr); err != nil {
 		return false, nil, nil, err
 	}
 	if n.cfg.Store != nil {
@@ -818,12 +817,34 @@ func (n *Node) connectBlock(block *wire.MsgBlock) (bool, []*wire.MsgBlock, []*wi
 			return false, nil, nil, err
 		}
 	}
-	if err := n.cfg.Chain.AddBlock(block); err != nil {
+	if err := n.addMainChainBlockLocked(block, addr); err != nil {
 		return false, nil, nil, err
 	}
 	connected := []*wire.MsgBlock{block}
 	connected = append(connected, n.connectOrphansLocked(block.MustBlockHash())...)
 	return true, connected, nil, nil
+}
+
+func (n *Node) validateMainChainBlockLocked(block *wire.MsgBlock, addr string) error {
+	if n.isHistoricalSyncBlockLocked(block, addr) {
+		return n.cfg.Chain.ValidateStoredBlock(block)
+	}
+	return n.cfg.Chain.ValidateBlock(block)
+}
+
+func (n *Node) addMainChainBlockLocked(block *wire.MsgBlock, addr string) error {
+	if n.isHistoricalSyncBlockLocked(block, addr) {
+		return n.cfg.Chain.AddStoredBlock(block)
+	}
+	return n.cfg.Chain.AddBlock(block)
+}
+
+func (n *Node) isHistoricalSyncBlockLocked(block *wire.MsgBlock, addr string) bool {
+	info, ok := n.peers[addr]
+	if !ok {
+		return false
+	}
+	return info.info.BestHeight > n.cfg.Chain.Height() && block.Header.Height <= info.info.BestHeight
 }
 
 func (n *Node) bestHeight() uint32 {

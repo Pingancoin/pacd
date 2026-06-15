@@ -119,6 +119,11 @@ func (c *Chain) ValidateBlock(block *wire.MsgBlock) error {
 	return err
 }
 
+func (c *Chain) ValidateStoredBlock(block *wire.MsgBlock) error {
+	_, err := c.validateBlock(block, false)
+	return err
+}
+
 func (c *Chain) ReorganizedBlocks(candidate []*wire.MsgBlock) ([]*wire.MsgBlock, bool, error) {
 	reorganized, ok, err := c.reorganizeCandidate(candidate)
 	if err != nil || !ok {
