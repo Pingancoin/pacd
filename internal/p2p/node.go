@@ -850,13 +850,16 @@ func (n *Node) unlockChain() {
 func (n *Node) reservePeer(addr string, inbound bool, static bool) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if _, ok := n.peers[addr]; ok {
-		return false
-	}
 	if n.banScores[banKey(addr)] >= banThreshold {
 		return false
 	}
 	isStatic := static || n.isStaticPeerLocked(addr)
+	if existing, ok := n.peers[addr]; ok {
+		if !isStatic || existing.conn != nil {
+			return false
+		}
+		delete(n.peers, addr)
+	}
 	if n.hasPeerForHostLocked(addr) {
 		if !isStatic || n.hasActivePeerForHostLocked(addr) {
 			return false

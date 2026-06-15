@@ -113,6 +113,27 @@ func TestReservePeerStaticDialReplacesPendingSameHost(t *testing.T) {
 	}
 }
 
+func TestReservePeerStaticDialReplacesPendingSameAddress(t *testing.T) {
+	addr := "203.0.113.10:9508"
+	node, err := NewNode(Config{
+		Params:   chaincfg.SimNetParams(),
+		MaxPeers: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !node.reservePeer(addr, false, false) {
+		t.Fatal("pending peer was rejected")
+	}
+	if !node.reservePeer(addr, false, true) {
+		t.Fatal("static dial was blocked by pending same-address reservation")
+	}
+	if got := len(node.peers); got != 1 {
+		t.Fatalf("expected one replacement reservation, got %d", got)
+	}
+}
+
 func TestInvalidOrphanIsRejectedBeforeCache(t *testing.T) {
 	params := chaincfg.SimNetParams()
 	chain := blockchain.New(params)
