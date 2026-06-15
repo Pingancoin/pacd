@@ -255,20 +255,20 @@ func (n *Node) Start(ctx context.Context) error {
 
 func (n *Node) DialOnce(ctx context.Context, addr string) error {
 	go func() {
-		if err := n.connectAndHandle(ctx, addr); err != nil {
+		if err := n.connectAndHandle(ctx, addr, false); err != nil {
 			n.logf("p2p connect %s failed: %v", addr, err)
 		}
 	}()
 	return nil
 }
 
-func (n *Node) connectAndHandle(ctx context.Context, addr string) error {
+func (n *Node) connectAndHandle(ctx context.Context, addr string, static bool) error {
 	dialer := &net.Dialer{Timeout: defaultHandshakeTimeout}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return err
 	}
-	n.handleConn(ctx, conn, false)
+	n.handleConn(ctx, conn, false, static)
 	return nil
 }
 
@@ -282,7 +282,7 @@ func (n *Node) acceptLoop(ctx context.Context, listener net.Listener) {
 			n.logf("p2p accept error: %v", err)
 			continue
 		}
-		go n.handleConn(ctx, conn, true)
+		go n.handleConn(ctx, conn, true, false)
 	}
 }
 
@@ -292,7 +292,7 @@ func (n *Node) connectLoop(ctx context.Context, addr string) {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := n.connectAndHandle(ctx, addr); err != nil {
+		if err := n.connectAndHandle(ctx, addr, true); err != nil {
 			n.logf("p2p connect %s failed: %v", addr, err)
 		}
 		select {
@@ -306,10 +306,10 @@ func (n *Node) connectLoop(ctx context.Context, addr string) {
 	}
 }
 
-func (n *Node) handleConn(ctx context.Context, conn net.Conn, inbound bool) {
+func (n *Node) handleConn(ctx context.Context, conn net.Conn, inbound bool, static bool) {
 	defer conn.Close()
 	addr := conn.RemoteAddr().String()
-	if !n.reservePeer(addr, inbound) {
+	if !n.reservePeer(addr, inbound, static) {
 		n.logf("p2p rejecting %s: max peers reached", addr)
 		return
 	}
@@ -847,20 +847,23 @@ func (n *Node) unlockChain() {
 	}
 }
 
-func (n *Node) reservePeer(addr string, inbound bool) bool {
+func (n *Node) reservePeer(addr string, inbound bool, static bool) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if _, ok := n.peers[addr]; ok {
 		return false
 	}
-	if n.hasPeerForHostLocked(addr) {
-		return false
-	}
 	if n.banScores[banKey(addr)] >= banThreshold {
 		return false
 	}
+	isStatic := static || n.isStaticPeerLocked(addr)
+	if n.hasPeerForHostLocked(addr) {
+		if !isStatic || n.hasActivePeerForHostLocked(addr) {
+			return false
+		}
+		n.removePendingPeersForHostLocked(addr)
+	}
 	activePeers := n.activePeerCountLocked()
-	isStatic := n.isStaticPeerLocked(addr)
 	if activePeers >= n.cfg.MaxPeers && (inbound || !isStatic) {
 		return false
 	}
@@ -908,6 +911,37 @@ func (n *Node) pendingPeerCountLocked() int {
 		}
 	}
 	return count
+}
+
+func (n *Node) hasActivePeerForHostLocked(addr string) bool {
+	host := banKey(addr)
+	if host == "" || isLoopbackHost(host) {
+		return false
+	}
+	for peerAddr, peer := range n.peers {
+		if peer.conn != nil && banKey(peerAddr) == host {
+			return true
+		}
+		if peer.conn != nil && peer.advertisedAddr != "" && banKey(peer.advertisedAddr) == host {
+			return true
+		}
+	}
+	return false
+}
+
+func (n *Node) removePendingPeersForHostLocked(addr string) {
+	host := banKey(addr)
+	if host == "" || isLoopbackHost(host) {
+		return
+	}
+	for peerAddr, peer := range n.peers {
+		if peer.conn != nil {
+			continue
+		}
+		if banKey(peerAddr) == host || (peer.advertisedAddr != "" && banKey(peer.advertisedAddr) == host) {
+			delete(n.peers, peerAddr)
+		}
+	}
 }
 
 func maxPendingPeers(maxPeers int) int {
@@ -1080,7 +1114,7 @@ func (n *Node) discoveryStep(ctx context.Context) {
 	for _, addr := range n.discoveryCandidates() {
 		addr := addr
 		go func() {
-			if err := n.connectAndHandle(ctx, addr); err != nil && ctx.Err() == nil {
+			if err := n.connectAndHandle(ctx, addr, false); err != nil && ctx.Err() == nil {
 				n.recordDiscoveryResult(addr, false)
 				n.logf("p2p discovered connect %s failed: %v", addr, err)
 			}
