@@ -11,7 +11,7 @@ import (
 
 const (
 	MaxHeadersPerMessage = 2000
-	MaxBlocksPerRequest  = 500
+	MaxBlocksPerRequest  = MaxHeadersPerMessage
 	MaxInventoryItems    = 1000
 	MaxAddrItems         = 1000
 	MaxAddrLength        = 255

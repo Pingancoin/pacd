@@ -37,6 +37,8 @@ const (
 	banScoreInvalidChain      = 50
 )
 
+var errSelfConnection = errors.New("self connection rejected")
+
 type addrSource string
 
 const (
@@ -76,6 +78,7 @@ type Node struct {
 	peers         map[string]*peerState
 	addrBook      map[string]*addrBookEntry
 	recentDials   map[string]time.Time
+	selfAddrs     map[string]struct{}
 	orphans       map[wire.Hash]*wire.MsgBlock
 	orphansByPrev map[wire.Hash][]wire.Hash
 	sideBlocks    map[wire.Hash]*wire.MsgBlock
@@ -136,6 +139,7 @@ func NewNode(cfg Config) (*Node, error) {
 		peers:         make(map[string]*peerState),
 		addrBook:      make(map[string]*addrBookEntry),
 		recentDials:   make(map[string]time.Time),
+		selfAddrs:     make(map[string]struct{}),
 		orphans:       make(map[wire.Hash]*wire.MsgBlock),
 		orphansByPrev: make(map[wire.Hash][]wire.Hash),
 		sideBlocks:    make(map[wire.Hash]*wire.MsgBlock),
@@ -145,6 +149,7 @@ func NewNode(cfg Config) (*Node, error) {
 	if err := node.loadAddrBook(); err != nil {
 		return nil, err
 	}
+	node.rememberSelfAddr(cfg.ListenAddr)
 	node.learnAddr(cfg.ListenAddr, addrSourceListen)
 	for _, addr := range cfg.Connect {
 		node.learnAddr(addr, addrSourceManual)
@@ -233,6 +238,7 @@ func (n *Node) Start(ctx context.Context) error {
 		n.mu.Lock()
 		n.listener = listener
 		n.mu.Unlock()
+		n.rememberSelfAddr(listener.Addr().String())
 		n.learnAddr(listener.Addr().String(), addrSourceListen)
 		go n.acceptLoop(ctx, listener)
 	}
@@ -241,6 +247,7 @@ func (n *Node) Start(ctx context.Context) error {
 		addr := addr
 		go n.connectLoop(ctx, addr)
 	}
+	go n.syncLoop(ctx)
 	go n.discoveryLoop(ctx)
 
 	<-ctx.Done()
@@ -263,6 +270,9 @@ func (n *Node) DialOnce(ctx context.Context, addr string) error {
 }
 
 func (n *Node) connectAndHandle(ctx context.Context, addr string, static bool) error {
+	if n.isKnownSelfAddr(addr) {
+		return errSelfConnection
+	}
 	dialer := &net.Dialer{Timeout: defaultHandshakeTimeout}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
@@ -292,6 +302,10 @@ func (n *Node) connectLoop(ctx context.Context, addr string) {
 		if ctx.Err() != nil {
 			return
 		}
+		if n.isKnownSelfAddr(addr) {
+			n.logf("p2p skipping self peer %s", addr)
+			return
+		}
 		if err := n.connectAndHandle(ctx, addr, true); err != nil {
 			n.logf("p2p connect %s failed: %v", addr, err)
 		}
@@ -317,6 +331,9 @@ func (n *Node) handleConn(ctx context.Context, conn net.Conn, inbound bool, stat
 
 	remoteVersion, err := n.handshake(conn, inbound)
 	if err != nil {
+		if errors.Is(err, errSelfConnection) {
+			n.rememberSelfAddr(addr)
+		}
 		n.logf("p2p handshake %s failed: %v", addr, err)
 		return
 	}
@@ -419,7 +436,7 @@ func (n *Node) readVersion(conn net.Conn) (Version, error) {
 		return Version{}, fmt.Errorf("genesis hash mismatch")
 	}
 	if remote.Nonce == n.nonce {
-		return Version{}, fmt.Errorf("self connection rejected")
+		return Version{}, errSelfConnection
 	}
 	return remote, nil
 }
@@ -672,9 +689,6 @@ func (n *Node) handleBlock(addr string, payload []byte) error {
 			n.broadcastInventory(connectedBlock.MustBlockHash(), addr)
 		}
 	}
-	if info, ok := n.peerInfo(addr); ok && info.BestHeight > n.bestHeight() {
-		return n.sendGetHeaders(addr)
-	}
 	return nil
 }
 
@@ -871,6 +885,9 @@ func (n *Node) unlockChain() {
 func (n *Node) reservePeer(addr string, inbound bool, static bool) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.isKnownSelfAddrLocked(addr) {
+		return false
+	}
 	if n.banScores[banKey(addr)] >= banThreshold {
 		return false
 	}
@@ -1131,6 +1148,36 @@ func (n *Node) discoveryLoop(ctx context.Context) {
 	}
 }
 
+func (n *Node) syncLoop(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n.syncStep()
+		}
+	}
+}
+
+func (n *Node) syncStep() {
+	best := n.bestHeight()
+	n.mu.Lock()
+	peers := make([]string, 0, len(n.peers))
+	for addr, peer := range n.peers {
+		if peer.conn != nil && peer.info.BestHeight > best {
+			peers = append(peers, addr)
+		}
+	}
+	n.mu.Unlock()
+	for _, addr := range peers {
+		if err := n.sendGetHeaders(addr); err != nil {
+			n.logf("p2p periodic getheaders %s failed: %v", addr, err)
+		}
+	}
+}
+
 func (n *Node) discoveryStep(ctx context.Context) {
 	if ctx.Err() != nil || n.PeerCount() >= n.cfg.MaxPeers {
 		return
@@ -1157,7 +1204,7 @@ func (n *Node) discoveryCandidates() []string {
 	}
 	candidates := make([]string, 0, len(n.addrBook))
 	for addr, entry := range n.addrBook {
-		if addr == "" || addr == self {
+		if addr == "" || addr == self || n.isKnownSelfAddrLocked(addr) {
 			continue
 		}
 		if _, ok := n.peers[addr]; ok {
@@ -1237,6 +1284,44 @@ func (n *Node) hasPeerForHostLocked(addr string) bool {
 func isLoopbackHost(host string) bool {
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func (n *Node) rememberSelfAddr(addr string) {
+	addr = normalizeAddr(addr)
+	if addr == "" {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.selfAddrs[addr] = struct{}{}
+	delete(n.addrBook, addr)
+	delete(n.recentDials, addr)
+}
+
+func (n *Node) isKnownSelfAddr(addr string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.isKnownSelfAddrLocked(addr)
+}
+
+func (n *Node) isKnownSelfAddrLocked(addr string) bool {
+	addr = normalizeAddr(addr)
+	if addr == "" {
+		return false
+	}
+	if _, ok := n.selfAddrs[addr]; ok {
+		return true
+	}
+	host := banKey(addr)
+	if host == "" || isLoopbackHost(host) {
+		return false
+	}
+	for selfAddr := range n.selfAddrs {
+		if banKey(selfAddr) == host {
+			return true
+		}
+	}
+	return false
 }
 
 func (n *Node) isStaticPeer(addr string) bool {

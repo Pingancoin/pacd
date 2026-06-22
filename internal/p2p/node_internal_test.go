@@ -134,6 +134,46 @@ func TestReservePeerStaticDialReplacesPendingSameAddress(t *testing.T) {
 	}
 }
 
+func TestReservePeerRejectsKnownSelfAddress(t *testing.T) {
+	node, err := NewNode(Config{
+		Params:   chaincfg.SimNetParams(),
+		MaxPeers: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	node.rememberSelfAddr("self.example:9508")
+	if node.reservePeer("self.example:9508", false, false) {
+		t.Fatal("known self address was accepted as a peer")
+	}
+	if node.reservePeer("self.example:10000", false, false) {
+		t.Fatal("known self host with a different port was accepted as a peer")
+	}
+	if !node.reservePeer("peer.example:9508", false, false) {
+		t.Fatal("different peer host was rejected")
+	}
+}
+
+func TestDiscoverySkipsKnownSelfAddress(t *testing.T) {
+	node, err := NewNode(Config{
+		Params:   chaincfg.SimNetParams(),
+		MaxPeers: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	node.learnAddr("self.example:9508", addrSourceVerified)
+	node.learnAddr("peer.example:9508", addrSourceVerified)
+	node.rememberSelfAddr("self.example:9508")
+
+	candidates := node.discoveryCandidates()
+	if len(candidates) != 1 || candidates[0] != "peer.example:9508" {
+		t.Fatalf("unexpected discovery candidates: %+v", candidates)
+	}
+}
+
 func TestInvalidOrphanIsRejectedBeforeCache(t *testing.T) {
 	params := chaincfg.SimNetParams()
 	chain := blockchain.New(params)
@@ -220,13 +260,13 @@ func TestValidOrphanConnectsAfterParent(t *testing.T) {
 	}
 }
 
-func TestHandleHeadersCapsGetBlocksRequest(t *testing.T) {
+func TestHandleHeadersRequestsFullHeaderBatch(t *testing.T) {
 	params := chaincfg.SimNetParams()
 	localChain := blockchain.New(params)
 	remoteChain := blockchain.New(params)
 	blockTime := time.Unix(params.GenesisBlock.Header.Timestamp, 0)
-	headers := make([]wire.BlockHeader, 0, MaxBlocksPerRequest+1)
-	for i := 0; i < MaxBlocksPerRequest+1; i++ {
+	headers := make([]wire.BlockHeader, 0, MaxHeadersPerMessage)
+	for i := 0; i < MaxHeadersPerMessage; i++ {
 		blockTime = blockTime.Add(params.TargetTimePerBlock)
 		block, err := mining.MineBlock(remoteChain, []byte("SsimMiner"), blockTime, 0)
 		if err != nil {
